@@ -8,7 +8,7 @@
   "main": "./dist/server.js",
   "types": "./dist/server.d.ts",
   "bin": {
-    "gizmosql-mcp": "./dist/cli.js"
+    "gizmosql-mcp": "dist/cli.js"
   },
   "files": [
     "dist/",
