@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# MCPB bundle build output
+build/
+*.mcpb
+*.mcpb.sha256
+
+# Downloaded native drivers (fetched by scripts/build-mcpb.sh)
+drivers/
+
+# Packaging
+*.tgz
+
+# Environment
+.env
+.env.*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Logs
+*.log
