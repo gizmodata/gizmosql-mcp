@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint:ci
+      - run: npm test
+
+  integration:
+    name: Integration (GizmoSQL in Docker)
+    runs-on: ubuntu-latest
+    services:
+      gizmosql:
+        image: gizmodata/gizmosql:v1.38.1
+        env:
+          TLS_ENABLED: "1"
+          GIZMOSQL_USERNAME: gizmosql
+          GIZMOSQL_PASSWORD: gizmosql_mcp_test_password
+        ports:
+          - 31337:31337
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - run: npm run test:integration
+        env:
+          GIZMOSQL_TEST_HOST: localhost
+          GIZMOSQL_TEST_PORT: "31337"
+          GIZMOSQL_TEST_USERNAME: gizmosql
+          GIZMOSQL_TEST_PASSWORD: gizmosql_mcp_test_password
+
+  bundle:
+    name: Build .mcpb bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - run: npm run build:mcpb
+      - uses: actions/upload-artifact@v6
+        with:
+          name: gizmosql-mcp-bundle
+          path: |
+            build/*.mcpb
+            build/*.mcpb.sha256
+          if-no-files-found: error
