@@ -15,6 +15,7 @@ import {
   truncateText,
 } from "./format.js";
 import { convertParams, paramsSchema, PARAMS_DESCRIPTION, ParameterError } from "./params.js";
+import { ConnectionRegistry, UnknownConnectionError } from "./registry.js";
 import { runSsoLogin } from "./sso.js";
 import {
   guardStatement,
@@ -26,19 +27,28 @@ import {
 import { PACKAGE_NAME, PACKAGE_VERSION } from "./version.js";
 
 export interface ServerContext {
-  connection: GizmoConnection;
+  registry: ConnectionRegistry;
   config: McpConfig;
   transport: "stdio" | "http";
 }
 
-const SERVER_INSTRUCTIONS =
-  "GizmoSQL is an Arrow Flight SQL server built on DuckDB, so DuckDB SQL syntax and functions apply. " +
-  "Start with list_catalogs / list_schemas / list_tables / describe_table to discover the schema, then " +
-  "use run_query for SELECT queries. Results are capped at a configurable number of rows; use LIMIT, " +
-  "aggregation, or WHERE filters to keep results small. Bind user-supplied literals with ? placeholders " +
-  "and the params argument instead of interpolating them into SQL. Unless GIZMOSQL_ALLOW_WRITES is " +
-  "enabled the server is read-only. Unqualified table names resolve against the session's current " +
-  "catalog and schema (see server_info); use use_schema or fully qualified names to work elsewhere.";
+function instructions(registry: ConnectionRegistry): string {
+  const multi = registry.names().length > 1;
+  return (
+    "GizmoSQL is an Arrow Flight SQL server built on DuckDB, so DuckDB SQL syntax and functions apply. " +
+    "Start with list_catalogs / list_schemas / list_tables / describe_table to discover the schema, then " +
+    "use run_query for SELECT queries. Results are capped at a configurable number of rows; use LIMIT, " +
+    "aggregation, or WHERE filters to keep results small. Bind user-supplied literals with ? placeholders " +
+    "and the params argument instead of interpolating them into SQL. Unless GIZMOSQL_ALLOW_WRITES is " +
+    "enabled the server is read-only. Unqualified table names resolve against the session's current " +
+    "catalog and schema (see server_info); use use_schema or fully qualified names to work elsewhere." +
+    (multi
+      ? ` Several GizmoSQL servers are configured (${registry.names().join(", ")}; current: ${registry.current()}). ` +
+        "Every tool accepts an optional connection argument, or call use_connection to switch the default; " +
+        "list_connections shows them."
+      : "")
+  );
+}
 
 function text(body: string, structured?: Record<string, unknown>): CallToolResult {
   const result: CallToolResult = { content: [{ type: "text", text: body }] };
@@ -51,18 +61,27 @@ function errorResult(message: string): CallToolResult {
 }
 
 /** Converts a thrown error into a redacted, user-facing message. */
-export function describeError(err: unknown, connection: GizmoConnection): string {
-  if (err instanceof SqlGuardError || err instanceof ParameterError || err instanceof QueryTimeoutError) {
-    return connection.redact(err.message);
+export function describeError(err: unknown, redact: (text: string) => string): string {
+  if (
+    err instanceof SqlGuardError ||
+    err instanceof ParameterError ||
+    err instanceof QueryTimeoutError ||
+    err instanceof UnknownConnectionError
+  ) {
+    return redact(err.message);
   }
   const raw = err instanceof Error ? err.message : String(err);
   // Surface the server's message verbatim (minus credentials); strip the
   // client's generic prefix so the DuckDB error is front and center.
   const cleaned = raw.replace(/^Failed to execute (?:query|update): /u, "");
-  return connection.redact(cleaned);
+  return redact(cleaned);
 }
 
 const sqlArg = z.string().min(1).describe("A single SQL statement (DuckDB dialect).");
+const connectionArg = z
+  .string()
+  .optional()
+  .describe("Name of the configured connection to use (see list_connections); defaults to the current one.");
 
 /** Identifier quoting for generated SQL (used only for DDL synthesis). */
 function quoteIdent(name: string): string {
@@ -111,10 +130,11 @@ async function fetchDdl(connection: GizmoConnection, ref: TableRef): Promise<str
 
 /** Builds the McpServer with every tool/resource registered against `ctx`. */
 export function createServer(ctx: ServerContext): McpServer {
-  const { connection, config } = ctx;
+  const { registry, config } = ctx;
+  const redact = (t: string) => registry.redact(t);
   const server = new McpServer(
     { name: PACKAGE_NAME, version: PACKAGE_VERSION },
-    { instructions: SERVER_INSTRUCTIONS },
+    { instructions: instructions(registry) },
   );
 
   /** Wraps a tool body so every failure becomes a redacted isError result. */
@@ -123,21 +143,74 @@ export function createServer(ctx: ServerContext): McpServer {
       try {
         return await fn(args);
       } catch (err) {
-        return errorResult(describeError(err, connection));
+        return errorResult(describeError(err, redact));
       }
     };
   };
+
+  /** Resolves the connection for a tool call (throws UnknownConnectionError). */
+  const conn = (name?: string) => registry.get(name);
+
+  server.registerTool(
+    "list_connections",
+    {
+      title: "List connections",
+      description:
+        "Lists the configured GizmoSQL connections (name, host, auth method, default catalog/schema) and " +
+        "which one is current. Credentials are never returned.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, idempotentHint: true },
+    },
+    tool(async () => {
+      const rows = registry.summaries();
+      const md = toMarkdownTable(
+        ["name", "host", "port", "tls", "auth", "default catalog", "default schema", "current"],
+        rows.map((r) => [
+          escapeMarkdownCell(r.name),
+          escapeMarkdownCell(r.host),
+          String(r.port),
+          r.tls ? "yes" : "no",
+          escapeMarkdownCell(r.auth),
+          escapeMarkdownCell(r.default_catalog ?? ""),
+          escapeMarkdownCell(r.default_schema ?? ""),
+          r.current ? "✓" : "",
+        ]),
+      );
+      return text(md, { connections: rows, current: registry.current() });
+    }),
+  );
+
+  server.registerTool(
+    "use_connection",
+    {
+      title: "Switch connection",
+      description:
+        "Makes the named connection the default for subsequent tool calls (see list_connections). " +
+        "Tools also accept a per-call connection argument.",
+      inputSchema: { name: z.string().min(1).describe("Connection name.") },
+      annotations: { readOnlyHint: true, idempotentHint: true },
+    },
+    tool(async ({ name }) => {
+      const canonical = registry.use(name);
+      const c = registry.configFor(canonical);
+      return text(`Current connection is now "${canonical}" (${c.host}:${c.port}).`, {
+        current: canonical,
+        host: c.host,
+        port: c.port,
+      });
+    }),
+  );
 
   server.registerTool(
     "list_catalogs",
     {
       title: "List catalogs",
       description: "Lists the catalogs (attached databases) visible to the connected GizmoSQL user.",
-      inputSchema: {},
+      inputSchema: { connection: connectionArg },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    tool(async () => {
-      const catalogs = await connection.run((c) => c.getCatalogs());
+    tool(async ({ connection }) => {
+      const catalogs = await conn(connection).run((c) => c.getCatalogs());
       const body = catalogs.length
         ? catalogs.map((c) => `- ${c}`).join("\n")
         : "(no catalogs visible)";
@@ -152,11 +225,12 @@ export function createServer(ctx: ServerContext): McpServer {
       description: "Lists schemas, optionally filtered to one catalog.",
       inputSchema: {
         catalog: z.string().optional().describe("Catalog name to filter by (exact match)."),
+        connection: connectionArg,
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    tool(async ({ catalog }) => {
-      const schemas = await connection.run((c) => c.getSchemas(catalog));
+    tool(async ({ catalog, connection }) => {
+      const schemas = await conn(connection).run((c) => c.getSchemas(catalog));
       const rows = schemas.map((s) => [escapeMarkdownCell(s.catalog), escapeMarkdownCell(s.schema)]);
       const body = rows.length ? toMarkdownTable(["catalog", "schema"], rows) : "(no schemas found)";
       return text(body, { schemas });
@@ -174,11 +248,12 @@ export function createServer(ctx: ServerContext): McpServer {
         catalog: z.string().optional().describe("Catalog name (exact match)."),
         schema: z.string().optional().describe("Schema name (SQL LIKE pattern, e.g. 'main')."),
         like: z.string().optional().describe("Table-name LIKE pattern, e.g. 'cust%'."),
+        connection: connectionArg,
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    tool(async ({ catalog, schema, like }) => {
-      const tables = await connection.run((c) => c.getTables(catalog, schema, like));
+    tool(async ({ catalog, schema, like, connection }) => {
+      const tables = await conn(connection).run((c) => c.getTables(catalog, schema, like));
       const rows = tables.map((t) => [
         escapeMarkdownCell(t.catalog),
         escapeMarkdownCell(t.schema),
@@ -204,10 +279,12 @@ export function createServer(ctx: ServerContext): McpServer {
         table: z.string().min(1).describe("Table or view name (exact match)."),
         schema: z.string().optional().describe("Schema name (exact match)."),
         catalog: z.string().optional().describe("Catalog name (exact match)."),
+        connection: connectionArg,
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    tool(async ({ table, schema, catalog }) => {
+    tool(async ({ table, schema, catalog, connection: connectionName }) => {
+      const connection = conn(connectionName);
       const filters: string[] = ["table_name = ?"];
       const params: Array<string> = [table];
       if (schema !== undefined) {
@@ -298,6 +375,7 @@ export function createServer(ctx: ServerContext): McpServer {
       const parts = [header, "", toMarkdownTable(["column", "type", "nullable", "default"], colRows)];
       if (constraintLines.length) parts.push("", "Constraints:", ...constraintLines);
       return text(parts.join("\n"), {
+        connection: connection.config.name,
         catalog: ref.catalog,
         schema: ref.schema,
         table: ref.table,
@@ -319,11 +397,13 @@ export function createServer(ctx: ServerContext): McpServer {
       inputSchema: {
         catalog: z.string().optional().describe("Catalog (database) name."),
         schema: z.string().optional().describe("Schema name within the catalog."),
+        connection: connectionArg,
       },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    tool(async ({ catalog, schema }) => {
+    tool(async ({ catalog, schema, connection: connectionName }) => {
       if (!catalog && !schema) return errorResult("Provide a catalog and/or a schema.");
+      const connection = conn(connectionName);
       await connection.useSchema({ catalog, schema });
       const t = await connection.query("SELECT current_catalog() AS c, current_schema() AS s");
       const current = { catalog: String(t.getChildAt(0)?.get(0)), schema: String(t.getChildAt(1)?.get(0)) };
@@ -341,7 +421,7 @@ export function createServer(ctx: ServerContext): McpServer {
         `${config.maxRows}); long cells are truncated to ${config.maxCellChars} characters with …. ` +
         (config.allowWrites
           ? "Writes are enabled on this server; prefer execute_statement for DML/DDL."
-          : "This server is read-only: only SELECT/WITH/SHOW/DESCRIBE/SUMMARIZE/EXPLAIN/PRAGMA(read) statements are accepted."),
+          : "This server is read-only: only SELECT/WITH/SHOW/DESCRIBE/SUMMARIZE/EXPLAIN/PRAGMA(read)/USE statements are accepted."),
       inputSchema: {
         sql: sqlArg,
         params: paramsSchema.optional().describe(PARAMS_DESCRIPTION),
@@ -351,6 +431,7 @@ export function createServer(ctx: ServerContext): McpServer {
           .min(1)
           .optional()
           .describe(`Row cap for this call (1..${config.maxRows}; default ${config.maxRows}).`),
+        connection: connectionArg,
       },
       outputSchema: {
         columns: z.array(z.object({ name: z.string(), type: z.string() })),
@@ -358,10 +439,12 @@ export function createServer(ctx: ServerContext): McpServer {
         row_count: z.number(),
         truncated: z.boolean(),
         elapsed_ms: z.number(),
+        connection: z.string(),
       },
       annotations: { readOnlyHint: !config.allowWrites, idempotentHint: !config.allowWrites },
     },
-    tool(async ({ sql, params, max_rows }) => {
+    tool(async ({ sql, params, max_rows, connection: connectionName }) => {
+      const connection = conn(connectionName);
       const guarded = guardStatement(sql, config.allowWrites);
       const maxRows = Math.min(max_rows ?? config.maxRows, config.maxRows);
       const bound = convertParams(params);
@@ -375,7 +458,7 @@ export function createServer(ctx: ServerContext): McpServer {
       } catch (err) {
         if (guarded.classification.wrappable && !(err instanceof QueryTimeoutError)) {
           throw new Error(
-            `${describeError(err, connection)}\n(Note: to enforce max_rows the query was executed as ` +
+            `${describeError(err, redact)}\n(Note: to enforce max_rows the query was executed as ` +
               `SELECT * FROM (<your query>) AS ${WRAPPER_ALIAS} LIMIT ${maxRows + 1}, so line numbers in the ` +
               "server's message are offset by one.)",
           );
@@ -398,6 +481,7 @@ export function createServer(ctx: ServerContext): McpServer {
         row_count: formatted.rowCount,
         truncated,
         elapsed_ms: elapsedMs,
+        connection: connection.config.name,
       });
     }),
   );
@@ -408,10 +492,11 @@ export function createServer(ctx: ServerContext): McpServer {
       title: "Explain query",
       description:
         "Returns DuckDB's EXPLAIN output (the physical plan) for a SQL statement without executing it.",
-      inputSchema: { sql: sqlArg },
+      inputSchema: { sql: sqlArg, connection: connectionArg },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    tool(async ({ sql }) => {
+    tool(async ({ sql, connection: connectionName }) => {
+      const connection = conn(connectionName);
       const guarded = guardStatement(sql, config.allowWrites);
       const normalized = normalizeStatement(guarded.sql);
       const explainSql = /^\s*EXPLAIN\b/iu.test(normalized) ? normalized : `EXPLAIN ${normalized}`;
@@ -441,10 +526,12 @@ export function createServer(ctx: ServerContext): McpServer {
         inputSchema: {
           sql: sqlArg,
           params: paramsSchema.optional().describe(PARAMS_DESCRIPTION),
+          connection: connectionArg,
         },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
-      tool(async ({ sql, params }) => {
+      tool(async ({ sql, params, connection: connectionName }) => {
+        const connection = conn(connectionName);
         const guarded = guardStatement(sql, true);
         const bound = convertParams(params);
         const started = Date.now();
@@ -454,6 +541,7 @@ export function createServer(ctx: ServerContext): McpServer {
         return text(`Statement executed. Affected rows: ${count} · ${elapsedMs} ms`, {
           affected_rows: affected,
           elapsed_ms: elapsedMs,
+          connection: connection.config.name,
         });
       }),
     );
@@ -464,12 +552,14 @@ export function createServer(ctx: ServerContext): McpServer {
     {
       title: "Server info",
       description:
-        "Reports the GizmoSQL and DuckDB versions, the connection (credentials redacted), the " +
-        "effective limits, and this MCP server's version.",
-      inputSchema: {},
+        "Reports the GizmoSQL and DuckDB versions of a connection, its connection URI (credentials " +
+        "redacted), the effective limits, every configured connection, and this MCP server's version.",
+      inputSchema: { connection: connectionArg },
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    tool(async () => {
+    tool(async ({ connection: connectionName }) => {
+      const connection = conn(connectionName);
+      const cfg = connection.config;
       let gizmosqlVersion = "unknown";
       let duckdbVersion = "unknown";
       let user = "unknown";
@@ -496,13 +586,15 @@ export function createServer(ctx: ServerContext): McpServer {
       }
       const auth = connection.effectiveAuth();
       const info = {
+        connection: cfg.name,
+        current_connection: registry.current(),
         gizmosql_version: gizmosqlVersion,
         duckdb_version: duckdbVersion,
-        connection_uri: redactedUri(config, auth.user),
+        connection_uri: redactedUri(cfg, auth.user),
         auth_method: auth.method,
         user,
-        tls: !config.plaintext,
-        tls_skip_verify: config.tlsSkipVerify,
+        tls: !cfg.plaintext,
+        tls_skip_verify: cfg.tlsSkipVerify,
         current_catalog: currentCatalog,
         current_schema: currentSchema,
         allow_writes: config.allowWrites,
@@ -514,10 +606,17 @@ export function createServer(ctx: ServerContext): McpServer {
         transport: ctx.transport,
         mcp_server: `${PACKAGE_NAME} ${PACKAGE_VERSION}`,
         session_warnings: connection.sessionWarnings(),
+        connections: registry.summaries(),
       };
-      const lines = Object.entries(info).map(
-        ([k, v]) => `- ${k}: ${Array.isArray(v) ? (v.length ? v.join("; ") : "none") : v === null ? "(not set)" : String(v)}`,
-      );
+      const lines = Object.entries(info)
+        .filter(([k]) => k !== "connections")
+        .map(([k, v]) => `- ${k}: ${Array.isArray(v) ? (v.length ? v.join("; ") : "none") : v === null ? "(not set)" : String(v)}`);
+      if (info.connections.length > 1) {
+        lines.push(
+          "- connections: " +
+            info.connections.map((c) => `${c.name} (${c.host}:${c.port})${c.current ? " [current]" : ""}`).join("; "),
+        );
+      }
       return text(lines.join("\n"), info);
     }),
   );
@@ -539,37 +638,52 @@ export function createServer(ctx: ServerContext): McpServer {
             .max(600)
             .optional()
             .describe("How long to wait for the browser login before returning (default 90)."),
+          connection: connectionArg,
         },
         annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
       },
-      tool(async ({ wait_seconds }) => {
-        const outcome = await runSsoLogin(connection, { waitSeconds: wait_seconds ?? 90 });
+      tool(async ({ wait_seconds, connection: connectionName }) => {
+        const outcome = await runSsoLogin(conn(connectionName), { waitSeconds: wait_seconds ?? 90 });
         return text(outcome.message, { status: outcome.status, auth_url: outcome.authUrl ?? null });
       }),
     );
   }
 
+  const multi = registry.names().length > 1;
   server.registerResource(
     "table_schema",
-    new ResourceTemplate("gizmosql://schema/{catalog}/{schema}/{table}", {
+    new ResourceTemplate("gizmosql://{connection}/schema/{catalog}/{schema}/{table}", {
       list: async () => {
-        const tables = await connection.run((c) => c.getTables());
-        return {
-          resources: tables.slice(0, 500).map((t) => ({
-            uri: `gizmosql://schema/${encodeURIComponent(t.catalog)}/${encodeURIComponent(t.schema)}/${encodeURIComponent(t.tableName)}`,
-            name: `${t.catalog}.${t.schema}.${t.tableName}`,
-            // Clients (e.g. Claude Desktop's resource picker) display `title`;
-            // without it they fall back to the template's title for every entry.
-            title: `${t.catalog}.${t.schema}.${t.tableName}`,
-            description: `DDL of ${t.tableType.toLowerCase()} ${t.catalog}.${t.schema}.${t.tableName}`,
-            mimeType: "text/plain",
-          })),
-        };
+        const resources: Array<{ uri: string; name: string; title: string; description: string; mimeType: string }> = [];
+        for (const connection of registry.all()) {
+          if (resources.length >= 500) break;
+          let tables;
+          try {
+            tables = await connection.run((c) => c.getTables());
+          } catch {
+            continue; // an unreachable server must not hide the others
+          }
+          for (const t of tables) {
+            if (resources.length >= 500) break;
+            const qualified = `${t.catalog}.${t.schema}.${t.tableName}`;
+            const label = multi ? `${connection.config.name}: ${qualified}` : qualified;
+            resources.push({
+              uri: `gizmosql://${encodeURIComponent(connection.config.name)}/schema/${encodeURIComponent(t.catalog)}/${encodeURIComponent(t.schema)}/${encodeURIComponent(t.tableName)}`,
+              name: label,
+              // Clients (e.g. Claude Desktop's resource picker) display `title`.
+              title: label,
+              description: `DDL of ${t.tableType.toLowerCase()} ${qualified} on connection ${connection.config.name}`,
+              mimeType: "text/plain",
+            });
+          }
+        }
+        return { resources };
       },
     }),
     {
       title: "Table DDL",
-      description: "CREATE statement (DDL) for a table or view: gizmosql://schema/{catalog}/{schema}/{table}",
+      description:
+        "CREATE statement (DDL) for a table or view: gizmosql://{connection}/schema/{catalog}/{schema}/{table}",
       mimeType: "text/plain",
     },
     async (uri, variables): Promise<ReadResourceResult> => {
@@ -580,12 +694,13 @@ export function createServer(ctx: ServerContext): McpServer {
         table: pick(variables.table),
       };
       try {
+        const connection = registry.get(pick(variables.connection));
         const ddl = await fetchDdl(connection, ref);
         const body = ddl ?? `-- ${ref.catalog}.${ref.schema}.${ref.table} not found`;
         return { contents: [{ uri: uri.href, mimeType: "text/plain", text: truncateText(body, 100000) }] };
       } catch (err) {
         return {
-          contents: [{ uri: uri.href, mimeType: "text/plain", text: `-- error: ${describeError(err, connection)}` }],
+          contents: [{ uri: uri.href, mimeType: "text/plain", text: `-- error: ${describeError(err, redact)}` }],
         };
       }
     },

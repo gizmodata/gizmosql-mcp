@@ -6,7 +6,10 @@ import { Table, type RecordBatch } from "apache-arrow";
 
 export type AuthMethod = "password" | "token" | "none";
 
-export interface McpConfig {
+/** Settings for one GizmoSQL server. */
+export interface ConnectionConfig {
+  /** Unique, case-insensitive name used in tool arguments (e.g. "default", "prod"). */
+  name: string;
   host: string;
   port: number;
   username?: string;
@@ -15,6 +18,17 @@ export interface McpConfig {
   plaintext: boolean;
   tlsSkipVerify: boolean;
   oauthPort: number;
+  /** Catalog to `USE` at session start (optional). */
+  defaultCatalog?: string;
+  /** Schema to `USE` at session start (optional). */
+  defaultSchema?: string;
+  /** Per-statement timeout applied to this connection's sessions (0 = none). */
+  queryTimeoutSeconds: number;
+}
+
+/** Whole-server settings plus every configured connection (the first is the initial default). */
+export interface McpConfig {
+  connections: ConnectionConfig[];
   allowWrites: boolean;
   maxRows: number;
   maxCellChars: number;
@@ -23,10 +37,6 @@ export interface McpConfig {
   mcpBearerToken?: string;
   /** Enables the optional `login_sso` tool (OAuth/SSO browser flow). */
   enableSso: boolean;
-  /** Catalog to `USE` at session start (optional). */
-  defaultCatalog?: string;
-  /** Schema to `USE` at session start (optional). */
-  defaultSchema?: string;
 }
 
 export const DEFAULTS = {
@@ -35,7 +45,11 @@ export const DEFAULTS = {
   maxRows: 500,
   maxCellChars: 200,
   queryTimeoutSeconds: 60,
+  connectionName: "default",
 } as const;
+
+/** Extra connection slots the Claude Desktop manifest exposes (`GIZMOSQL_2_*`, `GIZMOSQL_3_*`). */
+export const MANIFEST_SLOTS = ["2", "3"] as const;
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -46,6 +60,20 @@ export class ConfigError extends Error {
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off", ""]);
+
+/**
+ * Unsubstituted MCPB template placeholders. Claude Desktop passes the
+ * literal `${user_config.<key>}` for optional settings the user left
+ * blank, which must count as "not set".
+ */
+const TEMPLATE_PLACEHOLDER = /^\$\{[^}]*\}$/u;
+
+/** True when an env value should be treated as absent. */
+export function isUnset(raw: string | undefined): boolean {
+  if (raw === undefined) return true;
+  const v = raw.trim();
+  return v === "" || TEMPLATE_PLACEHOLDER.test(v);
+}
 
 export function parseBoolean(name: string, raw: string | undefined, fallback: boolean): boolean {
   if (isUnset(raw)) return fallback;
@@ -70,98 +98,151 @@ export function parseInteger(
   return n;
 }
 
-/**
- * Unsubstituted MCPB template placeholders. Claude Desktop passes the
- * literal `${user_config.<key>}` for optional settings the user left
- * blank, which must count as "not set".
- */
-const TEMPLATE_PLACEHOLDER = /^\$\{[^}]*\}$/u;
-
-/** True when an env value should be treated as absent. */
-export function isUnset(raw: string | undefined): boolean {
-  if (raw === undefined) return true;
-  const v = raw.trim();
-  return v === "" || TEMPLATE_PLACEHOLDER.test(v);
-}
-
 function nonEmpty(raw: string | undefined): string | undefined {
   return isUnset(raw) ? undefined : raw!.trim();
 }
 
-/** Builds the effective configuration from environment variables. */
-export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
-  const host = nonEmpty(env.GIZMOSQL_HOST);
-  if (!host) {
-    throw new ConfigError("GIZMOSQL_HOST is required (hostname or IP of the GizmoSQL server).");
+/** Env-variable key fragment for a connection key: `prod-eu` -> `PROD_EU`. */
+export function envKey(key: string): string {
+  return key.trim().toUpperCase().replace(/[^A-Z0-9]+/gu, "_");
+}
+
+/**
+ * Parses one connection from `env` using variables named `<prefix>HOST`,
+ * `<prefix>USERNAME`, ... (prefix `GIZMOSQL_` for the primary connection,
+ * `GIZMOSQL_<KEY>_` for additional ones). Returns null when no host is set.
+ */
+function parseConnection(
+  env: NodeJS.ProcessEnv,
+  prefix: string,
+  defaultName: string,
+  globals: { queryTimeoutSeconds: number; enableSso: boolean },
+): ConnectionConfig | null {
+  const v = (suffix: string) => env[`${prefix}${suffix}`];
+  const host = nonEmpty(v("HOST"));
+  if (!host) return null;
+  const label = `${prefix}HOST`;
+  const name = nonEmpty(v("NAME")) ?? defaultName;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(name)) {
+    throw new ConfigError(
+      `Connection name "${name}" (${prefix}NAME) must be 1-64 letters, digits, dots, dashes or underscores.`,
+    );
   }
-  const username = nonEmpty(env.GIZMOSQL_USERNAME);
-  const password = isUnset(env.GIZMOSQL_PASSWORD) && env.GIZMOSQL_PASSWORD !== ""
-    ? undefined
-    : env.GIZMOSQL_PASSWORD;
-  const token = nonEmpty(env.GIZMOSQL_TOKEN);
-  const enableSso = parseBoolean("GIZMOSQL_ENABLE_SSO", env.GIZMOSQL_ENABLE_SSO, false);
+  const username = nonEmpty(v("USERNAME"));
+  const rawPassword = v("PASSWORD");
+  const password = isUnset(rawPassword) && rawPassword !== "" ? undefined : rawPassword;
+  const token = nonEmpty(v("TOKEN"));
 
   const hasPassword = username !== undefined || (password !== undefined && password !== "");
   const hasToken = token !== undefined;
   if (hasPassword && hasToken) {
     throw new ConfigError(
-      "Set either GIZMOSQL_USERNAME/GIZMOSQL_PASSWORD or GIZMOSQL_TOKEN, not both.",
+      `Connection "${name}": set either ${prefix}USERNAME/${prefix}PASSWORD or ${prefix}TOKEN, not both.`,
     );
   }
   if (hasPassword && (username === undefined || password === undefined)) {
-    throw new ConfigError("GIZMOSQL_USERNAME and GIZMOSQL_PASSWORD must be set together.");
+    throw new ConfigError(`Connection "${name}": ${prefix}USERNAME and ${prefix}PASSWORD must be set together.`);
   }
-  if (!hasPassword && !hasToken && !enableSso) {
+  if (!hasPassword && !hasToken && !globals.enableSso) {
     throw new ConfigError(
-      "No credentials configured: set GIZMOSQL_USERNAME + GIZMOSQL_PASSWORD, or GIZMOSQL_TOKEN " +
-        "(or GIZMOSQL_ENABLE_SSO=true to sign in with the login_sso tool).",
+      `Connection "${name}" (${label}) has no credentials: set ${prefix}USERNAME + ${prefix}PASSWORD, or ` +
+        `${prefix}TOKEN (or GIZMOSQL_ENABLE_SSO=true to sign in with the login_sso tool).`,
     );
   }
-
   return {
+    name,
     host,
-    port: parseInteger("GIZMOSQL_PORT", env.GIZMOSQL_PORT, DEFAULTS.port, { min: 1, max: 65535 }),
+    port: parseInteger(`${prefix}PORT`, v("PORT"), DEFAULTS.port, { min: 1, max: 65535 }),
     username: hasPassword ? username : undefined,
     password: hasPassword ? password : undefined,
     token: hasToken ? token : undefined,
-    plaintext: parseBoolean("GIZMOSQL_PLAINTEXT", env.GIZMOSQL_PLAINTEXT, false),
-    tlsSkipVerify: parseBoolean("GIZMOSQL_TLS_SKIP_VERIFY", env.GIZMOSQL_TLS_SKIP_VERIFY, false),
-    oauthPort: parseInteger("GIZMOSQL_OAUTH_PORT", env.GIZMOSQL_OAUTH_PORT, DEFAULTS.oauthPort, {
-      min: 1,
-      max: 65535,
-    }),
-    allowWrites: parseBoolean("GIZMOSQL_ALLOW_WRITES", env.GIZMOSQL_ALLOW_WRITES, false),
-    maxRows: parseInteger("GIZMOSQL_MAX_ROWS", env.GIZMOSQL_MAX_ROWS, DEFAULTS.maxRows, {
-      min: 1,
-      max: 100000,
-    }),
-    maxCellChars: parseInteger(
-      "GIZMOSQL_MAX_CELL_CHARS",
-      env.GIZMOSQL_MAX_CELL_CHARS,
-      DEFAULTS.maxCellChars,
-      { min: 1, max: 100000 },
-    ),
-    queryTimeoutSeconds: parseInteger(
-      "GIZMOSQL_QUERY_TIMEOUT_SECONDS",
-      env.GIZMOSQL_QUERY_TIMEOUT_SECONDS,
-      DEFAULTS.queryTimeoutSeconds,
-      { min: 0, max: 86400 },
-    ),
-    mcpBearerToken: nonEmpty(env.GIZMOSQL_MCP_BEARER_TOKEN),
-    enableSso,
-    defaultCatalog: nonEmpty(env.GIZMOSQL_DEFAULT_CATALOG),
-    defaultSchema: nonEmpty(env.GIZMOSQL_DEFAULT_SCHEMA),
+    plaintext: parseBoolean(`${prefix}PLAINTEXT`, v("PLAINTEXT"), false),
+    tlsSkipVerify: parseBoolean(`${prefix}TLS_SKIP_VERIFY`, v("TLS_SKIP_VERIFY"), false),
+    oauthPort: parseInteger(`${prefix}OAUTH_PORT`, v("OAUTH_PORT"), DEFAULTS.oauthPort, { min: 1, max: 65535 }),
+    defaultCatalog: nonEmpty(v("DEFAULT_CATALOG")),
+    defaultSchema: nonEmpty(v("DEFAULT_SCHEMA")),
+    queryTimeoutSeconds: globals.queryTimeoutSeconds,
   };
 }
 
-export function authMethod(config: Pick<McpConfig, "username" | "password" | "token">): AuthMethod {
+/**
+ * Builds the effective configuration from environment variables.
+ *
+ * Connections:
+ * - primary: `GIZMOSQL_HOST` etc. (name `GIZMOSQL_CONNECTION_NAME`, default "default");
+ * - manifest slots: `GIZMOSQL_2_HOST` / `GIZMOSQL_3_HOST` etc. (names `GIZMOSQL_2_NAME`,
+ *   default "server2"/"server3");
+ * - any names listed in `GIZMOSQL_CONNECTIONS` (comma separated), read from
+ *   `GIZMOSQL_<NAME>_HOST` etc. with the name upper-cased and non-alphanumerics
+ *   replaced by `_`.
+ * Slots without a host are ignored. At least one connection is required.
+ */
+export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
+  const enableSso = parseBoolean("GIZMOSQL_ENABLE_SSO", env.GIZMOSQL_ENABLE_SSO, false);
+  const queryTimeoutSeconds = parseInteger(
+    "GIZMOSQL_QUERY_TIMEOUT_SECONDS",
+    env.GIZMOSQL_QUERY_TIMEOUT_SECONDS,
+    DEFAULTS.queryTimeoutSeconds,
+    { min: 0, max: 86400 },
+  );
+  const globals = { queryTimeoutSeconds, enableSso };
+
+  const connections: ConnectionConfig[] = [];
+  const primary = parseConnection(
+    env,
+    "GIZMOSQL_",
+    nonEmpty(env.GIZMOSQL_CONNECTION_NAME) ?? DEFAULTS.connectionName,
+    globals,
+  );
+  if (primary) connections.push(primary);
+
+  const extraKeys: Array<{ key: string; defaultName: string }> = MANIFEST_SLOTS.map((slot) => ({
+    key: slot,
+    defaultName: `server${slot}`,
+  }));
+  for (const listed of (nonEmpty(env.GIZMOSQL_CONNECTIONS) ?? "").split(",")) {
+    const key = listed.trim();
+    if (key) extraKeys.push({ key: envKey(key), defaultName: key.toLowerCase() });
+  }
+  for (const { key, defaultName } of extraKeys) {
+    const c = parseConnection(env, `GIZMOSQL_${key}_`, defaultName, globals);
+    if (c) connections.push(c);
+  }
+
+  if (connections.length === 0) {
+    throw new ConfigError("GIZMOSQL_HOST is required (hostname or IP of the GizmoSQL server).");
+  }
+  const seen = new Map<string, string>();
+  for (const c of connections) {
+    const k = c.name.toLowerCase();
+    if (seen.has(k)) {
+      throw new ConfigError(`Connection name "${c.name}" is used more than once (names are case-insensitive).`);
+    }
+    seen.set(k, c.name);
+  }
+
+  return {
+    connections,
+    allowWrites: parseBoolean("GIZMOSQL_ALLOW_WRITES", env.GIZMOSQL_ALLOW_WRITES, false),
+    maxRows: parseInteger("GIZMOSQL_MAX_ROWS", env.GIZMOSQL_MAX_ROWS, DEFAULTS.maxRows, { min: 1, max: 100000 }),
+    maxCellChars: parseInteger("GIZMOSQL_MAX_CELL_CHARS", env.GIZMOSQL_MAX_CELL_CHARS, DEFAULTS.maxCellChars, {
+      min: 1,
+      max: 100000,
+    }),
+    queryTimeoutSeconds,
+    mcpBearerToken: nonEmpty(env.GIZMOSQL_MCP_BEARER_TOKEN),
+    enableSso,
+  };
+}
+
+export function authMethod(config: Pick<ConnectionConfig, "username" | "password" | "token">): AuthMethod {
   if (config.token) return "token";
   if (config.username !== undefined) return "password";
   return "none";
 }
 
 /** Connection URI with the password/token never included. */
-export function redactedUri(config: McpConfig, overrideUser?: string): string {
+export function redactedUri(config: ConnectionConfig, overrideUser?: string): string {
   const user = overrideUser ?? (authMethod(config) === "token" ? "token" : config.username);
   const cred = user ? `${encodeURIComponent(user)}:***@` : "";
   const transport = config.plaintext ? "?transport=tcp" : "";
@@ -259,7 +340,7 @@ export class GizmoConnection {
   connectedAt: Date | null = null;
 
   constructor(
-    readonly config: McpConfig,
+    readonly config: ConnectionConfig,
     private readonly log: (message: string) => void = (m) => console.error(m),
   ) {
     this.searchPath = { catalog: config.defaultCatalog, schema: config.defaultSchema };
@@ -283,7 +364,7 @@ export class GizmoConnection {
 
   /** Secrets to redact from any message that might reach a client. */
   secrets(): Array<string | undefined> {
-    return [this.config.password, this.config.token, this.overrides.password, this.config.mcpBearerToken];
+    return [this.config.password, this.config.token, this.overrides.password];
   }
 
   redact(text: string): string {

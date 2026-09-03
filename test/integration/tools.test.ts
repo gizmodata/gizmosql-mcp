@@ -147,16 +147,18 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
       "describe_table",
       "explain_query",
       "list_catalogs",
+      "list_connections",
       "list_schemas",
       "list_tables",
       "run_query",
       "server_info",
+      "use_connection",
       "use_schema",
     ]);
     const runQuery = (await ro.listTools()).tools.find((t) => t.name === "run_query");
     assert.equal(runQuery?.annotations?.readOnlyHint, true);
     const templates = (await ro.listResourceTemplates()).resourceTemplates.map((t) => t.uriTemplate);
-    assert.deepEqual(templates, ["gizmosql://schema/{catalog}/{schema}/{table}"]);
+    assert.deepEqual(templates, ["gizmosql://{connection}/schema/{catalog}/{schema}/{table}"]);
   });
 
   it("registers execute_statement when writes are enabled", async () => {
@@ -287,11 +289,11 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
 
   it("serves table DDL as a resource", async () => {
     const listed = await ro.listResources();
-    const entry = listed.resources.find((r) => r.uri === "gizmosql://schema/memory/main/mcp_it");
+    const entry = listed.resources.find((r) => r.uri === "gizmosql://default/schema/memory/main/mcp_it");
     assert.ok(entry);
     assert.equal(entry.title, "memory.main.mcp_it");
     assert.equal(entry.name, "memory.main.mcp_it");
-    const read = await ro.readResource({ uri: "gizmosql://schema/memory/main/mcp_it" });
+    const read = await ro.readResource({ uri: "gizmosql://default/schema/memory/main/mcp_it" });
     const text = (read.contents[0] as { text: string }).text;
     assert.match(text, /CREATE TABLE mcp_it/);
   });
@@ -380,6 +382,68 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
       assert.equal(s.current_catalog, "memory");
     } finally {
       await badDefault.close();
+    }
+  });
+
+  it("supports several named connections with per-call and default switching", async () => {
+    assert.ok(target);
+    const multi = await stdioClient(target, {
+      GIZMOSQL_CONNECTION_NAME: "primary",
+      GIZMOSQL_2_HOST: target.host,
+      GIZMOSQL_2_PORT: String(target.port),
+      GIZMOSQL_2_USERNAME: USERNAME,
+      GIZMOSQL_2_PASSWORD: PASSWORD,
+      GIZMOSQL_2_TLS_SKIP_VERIFY: "true",
+      GIZMOSQL_2_NAME: "alt",
+      GIZMOSQL_2_DEFAULT_SCHEMA: "mcp_alt",
+      GIZMOSQL_CONNECTIONS: "third",
+      GIZMOSQL_THIRD_HOST: target.host,
+      GIZMOSQL_THIRD_PORT: String(target.port),
+      GIZMOSQL_THIRD_USERNAME: USERNAME,
+      GIZMOSQL_THIRD_PASSWORD: PASSWORD,
+      GIZMOSQL_THIRD_TLS_SKIP_VERIFY: "true",
+    });
+    try {
+      await call(rw, "execute_statement", { sql: "CREATE SCHEMA IF NOT EXISTS mcp_alt" });
+      const listed = await call(multi, "list_connections");
+      const s = listed.structuredContent as { current: string; connections: Array<{ name: string; current: boolean; default_schema: string | null }> };
+      assert.equal(s.current, "primary");
+      assert.deepEqual(s.connections.map((c) => c.name), ["primary", "alt", "third"]);
+      assert.equal(s.connections[1].default_schema, "mcp_alt");
+      assert.ok(!textOf(listed).includes(PASSWORD));
+
+      // Per-call connection argument.
+      const onAlt = await call(multi, "run_query", { sql: "SELECT current_schema() AS s", connection: "alt" });
+      assert.deepEqual((onAlt.structuredContent as { rows: unknown[][]; connection: string }).rows, [["mcp_alt"]]);
+      assert.equal((onAlt.structuredContent as { connection: string }).connection, "alt");
+      const onPrimary = await call(multi, "run_query", { sql: "SELECT current_schema() AS s" });
+      assert.deepEqual((onPrimary.structuredContent as { rows: unknown[][] }).rows, [["main"]]);
+
+      // Switching the default.
+      const switched = await call(multi, "use_connection", { name: "ALT" });
+      assert.equal(switched.isError, undefined, textOf(switched));
+      assert.equal((switched.structuredContent as { current: string }).current, "alt");
+      const afterSwitch = await call(multi, "run_query", { sql: "SELECT current_schema() AS s" });
+      assert.deepEqual((afterSwitch.structuredContent as { rows: unknown[][] }).rows, [["mcp_alt"]]);
+      const info = await call(multi, "server_info");
+      assert.equal((info.structuredContent as { connection: string }).connection, "alt");
+      assert.equal((info.structuredContent as { current_connection: string }).current_connection, "alt");
+      assert.match(textOf(info), /connections: primary \(.*\); alt \(.*\) \[current\]; third/);
+
+      // Unknown names are actionable errors.
+      const bad = await call(multi, "run_query", { sql: "SELECT 1", connection: "nope" });
+      assert.equal(bad.isError, true);
+      assert.match(textOf(bad), /Unknown connection "nope"\. Available connections: primary, alt, third/);
+
+      // Resources are namespaced by connection.
+      const resources = (await multi.listResources()).resources;
+      const mine = resources.find((r) => r.uri === "gizmosql://third/schema/memory/main/mcp_it");
+      assert.ok(mine);
+      assert.equal(mine.title, "third: memory.main.mcp_it");
+      const ddl = await multi.readResource({ uri: "gizmosql://third/schema/memory/main/mcp_it" });
+      assert.match((ddl.contents[0] as { text: string }).text, /CREATE TABLE mcp_it/);
+    } finally {
+      await multi.close();
     }
   });
 

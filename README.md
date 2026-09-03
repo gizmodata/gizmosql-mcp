@@ -18,6 +18,8 @@ Windows x64.
 
 | Tool | What it does |
 | --- | --- |
+| `list_connections()` | Configured GizmoSQL connections and which one is current (never credentials) |
+| `use_connection(name)` | Makes a connection the default for subsequent calls |
 | `list_catalogs` | Catalogs (attached databases) visible to the user |
 | `list_schemas(catalog?)` | Schemas, optionally in one catalog |
 | `list_tables(catalog?, schema?, like?)` | Tables and views with their type; `like` is a SQL LIKE pattern |
@@ -29,8 +31,13 @@ Windows x64.
 | `server_info()` | GizmoSQL/DuckDB versions, redacted connection URI, effective limits, extension version |
 | `login_sso(wait_seconds?)` | Browser-based OAuth/SSO sign-in. Only registered when SSO is enabled |
 
-It also exposes a resource template, `gizmosql://schema/{catalog}/{schema}/{table}`, that
-returns the DDL of a table or view.
+Every tool except `list_connections` and `use_connection` also accepts an optional
+`connection` argument naming one of the configured servers (see
+[Multiple connections](#multiple-connections)).
+
+It also exposes a resource template,
+`gizmosql://{connection}/schema/{catalog}/{schema}/{table}`, that returns the DDL of a table
+or view.
 
 ### Query parameters
 
@@ -142,6 +149,7 @@ same names.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `GIZMOSQL_HOST` | required | Hostname or IP of the GizmoSQL server |
+| `GIZMOSQL_CONNECTION_NAME` | `default` | Name of this connection (used with the `connection` tool argument) |
 | `GIZMOSQL_PORT` | `31337` | Flight SQL port |
 | `GIZMOSQL_USERNAME` / `GIZMOSQL_PASSWORD` | | Basic authentication |
 | `GIZMOSQL_TOKEN` | | Bearer/JWT token authentication (alternative to username/password) |
@@ -156,13 +164,47 @@ same names.
 | `GIZMOSQL_OAUTH_PORT` | `31339` | OAuth HTTP port used by `login_sso` |
 | `GIZMOSQL_ENABLE_SSO` | `false` | Register the `login_sso` tool (credentials may then be left empty) |
 | `GIZMOSQL_MCP_BEARER_TOKEN` | | HTTP transport only: required bearer token |
+| `GIZMOSQL_2_HOST`, `GIZMOSQL_3_HOST`, … | | Additional connections, see below |
+| `GIZMOSQL_CONNECTIONS` | | Comma-separated names of further connections, see below |
 
-Exactly one authentication method must be configured: username and password, a token, or
-SSO. The default catalog/schema are optional: when set, the server runs `USE` on each new
+Exactly one authentication method must be configured per connection: username and
+password, a token, or SSO. The default catalog/schema are optional: when set, the server runs `USE` on each new
 session so unqualified table names resolve there; if the name does not exist the server
 still starts and reports the problem (with the catalogs it found) in `server_info`. In a
 chat, `use_schema` or a plain `USE catalog.schema` switches for the rest of the session. `GIZMOSQL_DRIVER_LIB` can point at a custom `libadbc_driver_gizmosql` build if you
 need one (see the client README).
+
+### Multiple connections
+
+You can configure several GizmoSQL servers and switch between them without editing
+credentials.
+
+- **Claude Desktop extension.** The settings screen has two extra slots, *Connection 2* and
+  *Connection 3*, each with its own name, host, port, credentials, TLS flags and default
+  catalog/schema. Leave a slot's host blank to disable it. The primary connection's name
+  defaults to `default` (the **Connection name** setting changes it).
+- **Environment variables.** The slots map to `GIZMOSQL_2_*` and `GIZMOSQL_3_*`
+  (`GIZMOSQL_2_HOST`, `GIZMOSQL_2_NAME`, `GIZMOSQL_2_USERNAME`, `GIZMOSQL_2_PASSWORD`,
+  `GIZMOSQL_2_TOKEN`, `GIZMOSQL_2_PORT`, `GIZMOSQL_2_PLAINTEXT`, `GIZMOSQL_2_TLS_SKIP_VERIFY`,
+  `GIZMOSQL_2_DEFAULT_CATALOG`, `GIZMOSQL_2_DEFAULT_SCHEMA`). For any number of servers, list
+  names in `GIZMOSQL_CONNECTIONS` and define each one with the same variables prefixed by the
+  upper-cased name, for example:
+
+  ```bash
+  GIZMOSQL_CONNECTIONS=prod,dev-eu
+  GIZMOSQL_PROD_HOST=gizmosql.prod.example.com   GIZMOSQL_PROD_TOKEN=...
+  GIZMOSQL_DEV_EU_HOST=gizmosql.dev.example.com  GIZMOSQL_DEV_EU_USERNAME=... GIZMOSQL_DEV_EU_PASSWORD=...
+  ```
+
+  (Non-alphanumeric characters in a name become `_` in the variable prefix; `GIZMOSQL_<NAME>_NAME`
+  overrides the display name.)
+
+In a chat, `list_connections` shows what is configured, `use_connection` switches the
+default for the rest of the session, and every tool accepts a per-call `connection`
+argument, so "compare row counts of orders on prod and dev" works in one conversation. The
+first configured connection is the initial default. Connections are opened lazily; the
+row cap, timeout and read-only settings apply to all of them, while each server's user
+role still governs what that connection may do.
 
 ## Read-only model and security
 

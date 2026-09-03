@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "gizmosql",
   "display_name": "GizmoSQL",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Query your GizmoSQL (Arrow Flight SQL / DuckDB) server from Claude.",
-  "long_description": "Connects Claude Desktop to a GizmoSQL server over Arrow Flight SQL using the official @gizmodata/gizmosql-client and the native GizmoSQL ADBC driver (bundled for macOS, Windows x64 and Linux).\n\nTools: list catalogs, schemas and tables; describe a table (columns, types, constraints, estimated rows); run parameterised SQL queries with row caps and timeouts; explain a query; server info. Writes are disabled unless you enable them. A `gizmosql://schema/{catalog}/{schema}/{table}` resource returns table DDL.\n\nThe server runs on your machine and connects directly to the GizmoSQL host you configure (VPN / private networks work). Credentials are stored in your OS keychain by Claude Desktop and never appear in tool output or errors.",
+  "long_description": "Connects Claude Desktop to a GizmoSQL server over Arrow Flight SQL using the official @gizmodata/gizmosql-client and the native GizmoSQL ADBC driver (bundled for macOS, Windows x64 and Linux).\n\nTools: list catalogs, schemas and tables; describe a table (columns, types, constraints, estimated rows); run parameterised SQL queries with row caps and timeouts; explain a query; server info. Writes are disabled unless you enable them. A `gizmosql://schema/{catalog}/{schema}/{table}` resource returns table DDL.\n\nUp to three GizmoSQL servers can be configured; every tool takes an optional connection argument and use_connection switches the default.\n\nThe server runs on your machine and connects directly to the GizmoSQL host you configure (VPN / private networks work). Credentials are stored in your OS keychain by Claude Desktop and never appear in tool output or errors.",
   "author": {
     "name": "GizmoData LLC",
     "email": "info@gizmodata.com",
@@ -23,7 +23,9 @@
     "entry_point": "server/cli.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/server/cli.js"],
+      "args": [
+        "${__dirname}/server/cli.js"
+      ],
       "env": {
         "GIZMOSQL_HOST": "${user_config.host}",
         "GIZMOSQL_PORT": "${user_config.port}",
@@ -39,24 +41,92 @@
         "GIZMOSQL_OAUTH_PORT": "${user_config.oauth_port}",
         "GIZMOSQL_ENABLE_SSO": "${user_config.enable_sso}",
         "GIZMOSQL_DEFAULT_CATALOG": "${user_config.default_catalog}",
-        "GIZMOSQL_DEFAULT_SCHEMA": "${user_config.default_schema}"
+        "GIZMOSQL_DEFAULT_SCHEMA": "${user_config.default_schema}",
+        "GIZMOSQL_CONNECTION_NAME": "${user_config.connection_name}",
+        "GIZMOSQL_2_NAME": "${user_config.connection2_name}",
+        "GIZMOSQL_2_HOST": "${user_config.connection2_host}",
+        "GIZMOSQL_2_PORT": "${user_config.connection2_port}",
+        "GIZMOSQL_2_USERNAME": "${user_config.connection2_username}",
+        "GIZMOSQL_2_PASSWORD": "${user_config.connection2_password}",
+        "GIZMOSQL_2_TOKEN": "${user_config.connection2_token}",
+        "GIZMOSQL_2_PLAINTEXT": "${user_config.connection2_plaintext}",
+        "GIZMOSQL_2_TLS_SKIP_VERIFY": "${user_config.connection2_tls_skip_verify}",
+        "GIZMOSQL_2_DEFAULT_CATALOG": "${user_config.connection2_default_catalog}",
+        "GIZMOSQL_2_DEFAULT_SCHEMA": "${user_config.connection2_default_schema}",
+        "GIZMOSQL_3_NAME": "${user_config.connection3_name}",
+        "GIZMOSQL_3_HOST": "${user_config.connection3_host}",
+        "GIZMOSQL_3_PORT": "${user_config.connection3_port}",
+        "GIZMOSQL_3_USERNAME": "${user_config.connection3_username}",
+        "GIZMOSQL_3_PASSWORD": "${user_config.connection3_password}",
+        "GIZMOSQL_3_TOKEN": "${user_config.connection3_token}",
+        "GIZMOSQL_3_PLAINTEXT": "${user_config.connection3_plaintext}",
+        "GIZMOSQL_3_TLS_SKIP_VERIFY": "${user_config.connection3_tls_skip_verify}",
+        "GIZMOSQL_3_DEFAULT_CATALOG": "${user_config.connection3_default_catalog}",
+        "GIZMOSQL_3_DEFAULT_SCHEMA": "${user_config.connection3_default_schema}"
       }
     }
   },
   "tools": [
-    { "name": "list_catalogs", "description": "List the catalogs (attached databases) visible to the connected user." },
-    { "name": "list_schemas", "description": "List schemas, optionally filtered to one catalog." },
-    { "name": "list_tables", "description": "List tables and views (with type), optionally filtered by catalog, schema and a LIKE pattern." },
-    { "name": "describe_table", "description": "Columns, types, nullability, constraints and estimated row count for a table or view." },
-    { "name": "use_schema", "description": "Set the session's default catalog and/or schema (DuckDB USE) for unqualified table names." },
-    { "name": "run_query", "description": "Run a SQL query (DuckDB dialect) with optional bound parameters; returns a row-capped Markdown table plus JSON." },
-    { "name": "explain_query", "description": "Return DuckDB's EXPLAIN plan for a query without executing it." },
-    { "name": "execute_statement", "description": "Execute a DML/DDL statement and return the affected-row count (only available when writes are enabled)." },
-    { "name": "server_info", "description": "GizmoSQL/DuckDB versions, redacted connection details, effective limits and the extension version." },
-    { "name": "login_sso", "description": "Sign in via the server's OAuth/SSO provider in your browser (only available when SSO is enabled)." }
+    {
+      "name": "list_connections",
+      "description": "List the configured GizmoSQL connections and which one is current (no credentials)."
+    },
+    {
+      "name": "use_connection",
+      "description": "Make a named connection the default for subsequent tool calls."
+    },
+    {
+      "name": "list_catalogs",
+      "description": "List the catalogs (attached databases) visible to the connected user."
+    },
+    {
+      "name": "list_schemas",
+      "description": "List schemas, optionally filtered to one catalog."
+    },
+    {
+      "name": "list_tables",
+      "description": "List tables and views (with type), optionally filtered by catalog, schema and a LIKE pattern."
+    },
+    {
+      "name": "describe_table",
+      "description": "Columns, types, nullability, constraints and estimated row count for a table or view."
+    },
+    {
+      "name": "use_schema",
+      "description": "Set the session's default catalog and/or schema (DuckDB USE) for unqualified table names."
+    },
+    {
+      "name": "run_query",
+      "description": "Run a SQL query (DuckDB dialect) with optional bound parameters; returns a row-capped Markdown table plus JSON."
+    },
+    {
+      "name": "explain_query",
+      "description": "Return DuckDB's EXPLAIN plan for a query without executing it."
+    },
+    {
+      "name": "execute_statement",
+      "description": "Execute a DML/DDL statement and return the affected-row count (only available when writes are enabled)."
+    },
+    {
+      "name": "server_info",
+      "description": "GizmoSQL/DuckDB versions, redacted connection details, effective limits and the extension version."
+    },
+    {
+      "name": "login_sso",
+      "description": "Sign in via the server's OAuth/SSO provider in your browser (only available when SSO is enabled)."
+    }
   ],
   "tools_generated": false,
-  "keywords": ["gizmosql", "gizmodata", "sql", "duckdb", "arrow", "flight-sql", "database", "analytics"],
+  "keywords": [
+    "gizmosql",
+    "gizmodata",
+    "sql",
+    "duckdb",
+    "arrow",
+    "flight-sql",
+    "database",
+    "analytics"
+  ],
   "license": "Apache-2.0",
   "privacy_policies": [
     "https://github.com/gizmodata/gizmosql-mcp#privacy-policy",
@@ -64,12 +134,22 @@
   ],
   "compatibility": {
     "claude_desktop": ">=1.0.0",
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "node": ">=22.0.0"
     }
   },
   "user_config": {
+    "connection_name": {
+      "type": "string",
+      "title": "Connection name",
+      "description": "Name for this (primary) connection, used with the connection argument of tools. Default: default.",
+      "required": false
+    },
     "host": {
       "type": "string",
       "title": "GizmoSQL host",
@@ -151,7 +231,7 @@
     "max_cell_chars": {
       "type": "number",
       "title": "Maximum characters per cell",
-      "description": "Longer values are truncated with …",
+      "description": "Longer values are truncated with \u2026",
       "default": 200,
       "min": 1,
       "max": 100000,
@@ -180,6 +260,142 @@
       "title": "Enable SSO sign-in tool",
       "description": "Adds a login_sso tool that signs in through the server's OAuth/SSO identity provider in your browser (leave username/password/token blank).",
       "default": false,
+      "required": false
+    },
+    "connection2_name": {
+      "type": "string",
+      "title": "Connection 2: name",
+      "description": "Optional name for an additional GizmoSQL server (default server2). Leave the host blank to disable this slot.",
+      "required": false
+    },
+    "connection2_host": {
+      "type": "string",
+      "title": "Connection 2: host",
+      "description": "Hostname or IP of the additional server. Blank disables this connection.",
+      "required": false
+    },
+    "connection2_port": {
+      "type": "number",
+      "title": "Connection 2: port",
+      "description": "Flight SQL port.",
+      "default": 31337,
+      "min": 1,
+      "max": 65535,
+      "required": false
+    },
+    "connection2_username": {
+      "type": "string",
+      "title": "Connection 2: username",
+      "description": "Username for basic authentication (leave blank when using a token).",
+      "sensitive": true,
+      "required": false
+    },
+    "connection2_password": {
+      "type": "string",
+      "title": "Connection 2: password",
+      "description": "Password for basic authentication.",
+      "sensitive": true,
+      "required": false
+    },
+    "connection2_token": {
+      "type": "string",
+      "title": "Connection 2: bearer token",
+      "description": "JWT/bearer token (alternative to username/password).",
+      "sensitive": true,
+      "required": false
+    },
+    "connection2_plaintext": {
+      "type": "boolean",
+      "title": "Connection 2: plaintext (no TLS)",
+      "description": "Connect without TLS (development servers only).",
+      "default": false,
+      "required": false
+    },
+    "connection2_tls_skip_verify": {
+      "type": "boolean",
+      "title": "Connection 2: skip TLS certificate verification",
+      "description": "Accept self-signed / untrusted certificates.",
+      "default": false,
+      "required": false
+    },
+    "connection2_default_catalog": {
+      "type": "string",
+      "title": "Connection 2: default catalog",
+      "description": "Optional catalog to USE at session start.",
+      "required": false
+    },
+    "connection2_default_schema": {
+      "type": "string",
+      "title": "Connection 2: default schema",
+      "description": "Optional schema to USE at session start.",
+      "required": false
+    },
+    "connection3_name": {
+      "type": "string",
+      "title": "Connection 3: name",
+      "description": "Optional name for an additional GizmoSQL server (default server3). Leave the host blank to disable this slot.",
+      "required": false
+    },
+    "connection3_host": {
+      "type": "string",
+      "title": "Connection 3: host",
+      "description": "Hostname or IP of the additional server. Blank disables this connection.",
+      "required": false
+    },
+    "connection3_port": {
+      "type": "number",
+      "title": "Connection 3: port",
+      "description": "Flight SQL port.",
+      "default": 31337,
+      "min": 1,
+      "max": 65535,
+      "required": false
+    },
+    "connection3_username": {
+      "type": "string",
+      "title": "Connection 3: username",
+      "description": "Username for basic authentication (leave blank when using a token).",
+      "sensitive": true,
+      "required": false
+    },
+    "connection3_password": {
+      "type": "string",
+      "title": "Connection 3: password",
+      "description": "Password for basic authentication.",
+      "sensitive": true,
+      "required": false
+    },
+    "connection3_token": {
+      "type": "string",
+      "title": "Connection 3: bearer token",
+      "description": "JWT/bearer token (alternative to username/password).",
+      "sensitive": true,
+      "required": false
+    },
+    "connection3_plaintext": {
+      "type": "boolean",
+      "title": "Connection 3: plaintext (no TLS)",
+      "description": "Connect without TLS (development servers only).",
+      "default": false,
+      "required": false
+    },
+    "connection3_tls_skip_verify": {
+      "type": "boolean",
+      "title": "Connection 3: skip TLS certificate verification",
+      "description": "Accept self-signed / untrusted certificates.",
+      "default": false,
+      "required": false
+    },
+    "connection3_default_catalog": {
+      "type": "string",
+      "title": "Connection 3: default catalog",
+      "description": "Optional catalog to USE at session start.",
+      "required": false
+    },
+    "connection3_default_schema": {
+      "type": "string",
+      "title": "Connection 3: default schema",
+      "description": "Optional schema to USE at session start.",
       "required": false
     }
   }

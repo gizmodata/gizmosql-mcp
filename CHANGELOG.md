@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-03
+
+### Added
+- **Multiple connections.** Up to two additional servers in the extension
+  settings (*Connection 2* / *Connection 3*, mapped to `GIZMOSQL_2_*` /
+  `GIZMOSQL_3_*`), and any number via `GIZMOSQL_CONNECTIONS=name,...` with
+  `GIZMOSQL_<NAME>_*` variables. New tools `list_connections` and
+  `use_connection`; every other tool takes an optional `connection`
+  argument. `GIZMOSQL_CONNECTION_NAME` names the primary connection
+  (default `default`). `server_info` reports all connections.
+
+### Changed
+- Table DDL resource URIs now include the connection:
+  `gizmosql://{connection}/schema/{catalog}/{schema}/{table}` (previously
+  `gizmosql://schema/...`).
+
 ## [0.2.2] - 2026-09-03
 
 ### Added
