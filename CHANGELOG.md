@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-03
+
+### Changed
+- Extension settings order: default catalog/schema now follow the username
+  and password for each connection.
+
 ## [0.3.1] - 2026-09-03
 
 ### Removed
