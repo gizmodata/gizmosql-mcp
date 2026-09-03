@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-03
+
+### Added
+- Each release now also attaches an unversioned `gizmosql-mcp.mcpb` (and
+  `.sha256`), so the stable link
+  https://github.com/gizmodata/gizmosql-mcp/releases/latest/download/gizmosql-mcp.mcpb
+  always downloads the newest bundle. The README links to it.
+
 ## [0.2.1] - 2026-09-03
 
 ### Fixed

@@ -59,11 +59,17 @@ Example call:
 
 ## Installation
 
+Quick links: [latest `.mcpb` download](https://github.com/gizmodata/gizmosql-mcp/releases/latest/download/gizmosql-mcp.mcpb)
+· [npm package](https://www.npmjs.com/package/@gizmodata/gizmosql-mcp)
+· [all releases](https://github.com/gizmodata/gizmosql-mcp/releases)
+
 ### Claude Desktop extension (`.mcpb`)
 
-1. Download `gizmosql-mcp-<version>.mcpb` from the
-   [GitHub Releases](https://github.com/gizmodata/gizmosql-mcp/releases) page. The `.sha256`
-   file next to it lets you verify the download.
+1. Download the latest bundle:
+   **[gizmosql-mcp.mcpb](https://github.com/gizmodata/gizmosql-mcp/releases/latest/download/gizmosql-mcp.mcpb)**
+   (checksum: [gizmosql-mcp.mcpb.sha256](https://github.com/gizmodata/gizmosql-mcp/releases/latest/download/gizmosql-mcp.mcpb.sha256)).
+   Every release also carries a versioned copy, `gizmosql-mcp-<version>.mcpb`, on the
+   [Releases](https://github.com/gizmodata/gizmosql-mcp/releases) page.
 2. Either double-click the file, or in Claude Desktop open **Settings → Extensions →
    Advanced settings → Install Extension…** and pick the file.
 3. Fill in the settings (host, port, credentials, limits). Credentials are marked sensitive

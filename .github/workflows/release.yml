@@ -71,8 +71,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: |
-            build/*.mcpb
-            build/*.mcpb.sha256
+            build/gizmosql-mcp-*.mcpb
+            build/gizmosql-mcp-*.mcpb.sha256
+            build/gizmosql-mcp.mcpb
+            build/gizmosql-mcp.mcpb.sha256
             *.tgz
           body_path: release_notes.md
 

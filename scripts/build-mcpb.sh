@@ -78,6 +78,11 @@ npx mcpb validate "$BUNDLE/manifest.json"
 rm -f "$OUT"
 npx mcpb pack "$BUNDLE" "$OUT"
 
-(cd "$BUILD_DIR" && shasum -a 256 "$(basename "$OUT")" > "$(basename "$OUT").sha256")
-echo "==> Wrote $OUT"
-cat "$OUT.sha256"
+# Versioned artifact plus an unversioned copy, so the GitHub "latest" URL
+# (https://github.com/gizmodata/gizmosql-mcp/releases/latest/download/gizmosql-mcp.mcpb)
+# always points at the newest release.
+LATEST="$BUILD_DIR/gizmosql-mcp.mcpb"
+cp "$OUT" "$LATEST"
+(cd "$BUILD_DIR" && shasum -a 256 "$(basename "$OUT")" > "$(basename "$OUT").sha256" && shasum -a 256 "$(basename "$LATEST")" > "$(basename "$LATEST").sha256")
+echo "==> Wrote $OUT and $LATEST"
+cat "$OUT.sha256" "$LATEST.sha256"
