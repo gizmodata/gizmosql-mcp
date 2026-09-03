@@ -55,6 +55,10 @@
   "tools_generated": false,
   "keywords": ["gizmosql", "gizmodata", "sql", "duckdb", "arrow", "flight-sql", "database", "analytics"],
   "license": "Apache-2.0",
+  "privacy_policies": [
+    "https://github.com/gizmodata/gizmosql-mcp#privacy-policy",
+    "https://gizmodata.com/privacy"
+  ],
   "compatibility": {
     "claude_desktop": ">=1.0.0",
     "platforms": ["darwin", "win32", "linux"],

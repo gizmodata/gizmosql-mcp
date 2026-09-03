@@ -269,6 +269,27 @@ The integration tests can target an existing server instead of Docker with
 
 See [NOTES.md](NOTES.md) for implementation notes, known limitations and follow-ups.
 
+## Privacy Policy
+
+This extension runs entirely on your computer and talks only to the GizmoSQL server you
+configure (and, when you use `login_sso`, that server's OAuth endpoint and your identity
+provider in your browser).
+
+- **Data collection.** The extension collects nothing. It does not send telemetry,
+  analytics or crash reports to GizmoData or anyone else.
+- **Usage and storage.** The SQL your MCP client sends and the rows the server returns
+  pass through the extension in memory and are handed back to the client; nothing is
+  written to disk. Connection settings are stored by Claude Desktop; credentials marked
+  sensitive are kept in your operating system's keychain. An SSO identity token is held
+  in process memory only and discarded when the extension exits.
+- **Third-party sharing.** Data is shared only with the GizmoSQL server you configured.
+  What your MCP client (for example Claude) does with tool results is governed by that
+  client's own privacy policy.
+- **Data retention.** The extension retains no data between runs. Your GizmoSQL server
+  may log queries according to its own configuration.
+- **Contact.** privacy questions: info@gizmodata.com. GizmoData's general privacy policy is
+  at <https://gizmodata.com/privacy>.
+
 ## License
 
 Apache License 2.0

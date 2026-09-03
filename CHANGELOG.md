@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Desktop extension packaging (`manifest.json`, `scripts/build-mcpb.sh`)
   bundling the native driver for macOS (arm64/x64), Linux (x64/arm64) and
   Windows x64, verified against the client's `driver-manifest.json`.
+- Privacy Policy section in the README and `privacy_policies` in the manifest
+  (required for Anthropic's Connectors Directory).
 - Unit tests (guard, formatting, parameters, config) and Docker-based
   integration tests; GitHub Actions CI and tag-triggered release workflow
   (GitHub Release with `.mcpb` + checksum, npm publish).
