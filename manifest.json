@@ -1,0 +1,167 @@
+{
+  "manifest_version": "0.3",
+  "name": "gizmosql",
+  "display_name": "GizmoSQL",
+  "version": "0.1.0",
+  "description": "Query your GizmoSQL (Arrow Flight SQL / DuckDB) server from Claude.",
+  "long_description": "Connects Claude Desktop to a GizmoSQL server over Arrow Flight SQL using the official @gizmodata/gizmosql-client and the native GizmoSQL ADBC driver (bundled for macOS, Windows x64 and Linux).\n\nTools: list catalogs, schemas and tables; describe a table (columns, types, constraints, estimated rows); run parameterised SQL queries with row caps and timeouts; explain a query; server info. Writes are disabled unless you enable them. A `gizmosql://schema/{catalog}/{schema}/{table}` resource returns table DDL.\n\nThe server runs on your machine and connects directly to the GizmoSQL host you configure (VPN / private networks work). Credentials are stored in your OS keychain by Claude Desktop and never appear in tool output or errors.",
+  "author": {
+    "name": "GizmoData LLC",
+    "email": "info@gizmodata.com",
+    "url": "https://gizmodata.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gizmodata/gizmosql-mcp"
+  },
+  "homepage": "https://gizmosql.com",
+  "documentation": "https://github.com/gizmodata/gizmosql-mcp#readme",
+  "support": "https://github.com/gizmodata/gizmosql-mcp/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/cli.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/cli.js"],
+      "env": {
+        "GIZMOSQL_HOST": "${user_config.host}",
+        "GIZMOSQL_PORT": "${user_config.port}",
+        "GIZMOSQL_USERNAME": "${user_config.username}",
+        "GIZMOSQL_PASSWORD": "${user_config.password}",
+        "GIZMOSQL_TOKEN": "${user_config.token}",
+        "GIZMOSQL_PLAINTEXT": "${user_config.plaintext}",
+        "GIZMOSQL_TLS_SKIP_VERIFY": "${user_config.tls_skip_verify}",
+        "GIZMOSQL_ALLOW_WRITES": "${user_config.allow_writes}",
+        "GIZMOSQL_MAX_ROWS": "${user_config.max_rows}",
+        "GIZMOSQL_MAX_CELL_CHARS": "${user_config.max_cell_chars}",
+        "GIZMOSQL_QUERY_TIMEOUT_SECONDS": "${user_config.query_timeout_seconds}",
+        "GIZMOSQL_OAUTH_PORT": "${user_config.oauth_port}",
+        "GIZMOSQL_ENABLE_SSO": "${user_config.enable_sso}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "list_catalogs", "description": "List the catalogs (attached databases) visible to the connected user." },
+    { "name": "list_schemas", "description": "List schemas, optionally filtered to one catalog." },
+    { "name": "list_tables", "description": "List tables and views (with type), optionally filtered by catalog, schema and a LIKE pattern." },
+    { "name": "describe_table", "description": "Columns, types, nullability, constraints and estimated row count for a table or view." },
+    { "name": "run_query", "description": "Run a SQL query (DuckDB dialect) with optional bound parameters; returns a row-capped Markdown table plus JSON." },
+    { "name": "explain_query", "description": "Return DuckDB's EXPLAIN plan for a query without executing it." },
+    { "name": "execute_statement", "description": "Execute a DML/DDL statement and return the affected-row count (only available when writes are enabled)." },
+    { "name": "server_info", "description": "GizmoSQL/DuckDB versions, redacted connection details, effective limits and the extension version." },
+    { "name": "login_sso", "description": "Sign in via the server's OAuth/SSO provider in your browser (only available when SSO is enabled)." }
+  ],
+  "tools_generated": false,
+  "keywords": ["gizmosql", "gizmodata", "sql", "duckdb", "arrow", "flight-sql", "database", "analytics"],
+  "license": "Apache-2.0",
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=22.0.0"
+    }
+  },
+  "user_config": {
+    "host": {
+      "type": "string",
+      "title": "GizmoSQL host",
+      "description": "Hostname or IP address of the GizmoSQL server (reachable from this machine, e.g. over your VPN).",
+      "required": true
+    },
+    "port": {
+      "type": "number",
+      "title": "Port",
+      "description": "Flight SQL port of the GizmoSQL server.",
+      "default": 31337,
+      "min": 1,
+      "max": 65535,
+      "required": false
+    },
+    "username": {
+      "type": "string",
+      "title": "Username",
+      "description": "Username for basic authentication (leave blank when using a token or SSO). A read-only role is recommended.",
+      "sensitive": true,
+      "required": false
+    },
+    "password": {
+      "type": "string",
+      "title": "Password",
+      "description": "Password for basic authentication.",
+      "sensitive": true,
+      "required": false
+    },
+    "token": {
+      "type": "string",
+      "title": "Bearer token",
+      "description": "JWT/bearer token for token authentication (alternative to username/password).",
+      "sensitive": true,
+      "required": false
+    },
+    "plaintext": {
+      "type": "boolean",
+      "title": "Plaintext (no TLS)",
+      "description": "Connect without TLS. Only for development servers started without TLS.",
+      "default": false,
+      "required": false
+    },
+    "tls_skip_verify": {
+      "type": "boolean",
+      "title": "Skip TLS certificate verification",
+      "description": "Accept self-signed / untrusted server certificates.",
+      "default": false,
+      "required": false
+    },
+    "allow_writes": {
+      "type": "boolean",
+      "title": "Allow writes",
+      "description": "Enable INSERT/UPDATE/DELETE/DDL via the execute_statement tool. Keep off unless you need it; the database user's privileges remain the real security boundary.",
+      "default": false,
+      "required": false
+    },
+    "max_rows": {
+      "type": "number",
+      "title": "Maximum rows per query",
+      "description": "Upper bound on rows returned by run_query.",
+      "default": 500,
+      "min": 1,
+      "max": 100000,
+      "required": false
+    },
+    "max_cell_chars": {
+      "type": "number",
+      "title": "Maximum characters per cell",
+      "description": "Longer values are truncated with …",
+      "default": 200,
+      "min": 1,
+      "max": 100000,
+      "required": false
+    },
+    "query_timeout_seconds": {
+      "type": "number",
+      "title": "Query timeout (seconds)",
+      "description": "Queries running longer than this are cancelled (0 disables the timeout).",
+      "default": 60,
+      "min": 0,
+      "max": 86400,
+      "required": false
+    },
+    "oauth_port": {
+      "type": "number",
+      "title": "OAuth/SSO port",
+      "description": "HTTP port of the server's OAuth endpoint (only used by SSO sign-in).",
+      "default": 31339,
+      "min": 1,
+      "max": 65535,
+      "required": false
+    },
+    "enable_sso": {
+      "type": "boolean",
+      "title": "Enable SSO sign-in tool",
+      "description": "Adds a login_sso tool that signs in through the server's OAuth/SSO identity provider in your browser (leave username/password/token blank).",
+      "default": false,
+      "required": false
+    }
+  }
+}
