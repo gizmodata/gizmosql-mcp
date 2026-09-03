@@ -37,7 +37,8 @@ const SERVER_INSTRUCTIONS =
   "use run_query for SELECT queries. Results are capped at a configurable number of rows; use LIMIT, " +
   "aggregation, or WHERE filters to keep results small. Bind user-supplied literals with ? placeholders " +
   "and the params argument instead of interpolating them into SQL. Unless GIZMOSQL_ALLOW_WRITES is " +
-  "enabled the server is read-only.";
+  "enabled the server is read-only. Unqualified table names resolve against the session's current " +
+  "catalog and schema (see server_info); use use_schema or fully qualified names to work elsewhere.";
 
 function text(body: string, structured?: Record<string, unknown>): CallToolResult {
   const result: CallToolResult = { content: [{ type: "text", text: body }] };
@@ -309,6 +310,28 @@ export function createServer(ctx: ServerContext): McpServer {
   );
 
   server.registerTool(
+    "use_schema",
+    {
+      title: "Set default catalog/schema",
+      description:
+        "Sets the session's default catalog and/or schema (DuckDB USE) so unqualified table names " +
+        "resolve there for the rest of the session. Does not read or modify data.",
+      inputSchema: {
+        catalog: z.string().optional().describe("Catalog (database) name."),
+        schema: z.string().optional().describe("Schema name within the catalog."),
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true },
+    },
+    tool(async ({ catalog, schema }) => {
+      if (!catalog && !schema) return errorResult("Provide a catalog and/or a schema.");
+      await connection.useSchema({ catalog, schema });
+      const t = await connection.query("SELECT current_catalog() AS c, current_schema() AS s");
+      const current = { catalog: String(t.getChildAt(0)?.get(0)), schema: String(t.getChildAt(1)?.get(0)) };
+      return text(`Default set to ${current.catalog}.${current.schema} for this session.`, current);
+    }),
+  );
+
+  server.registerTool(
     "run_query",
     {
       title: "Run query",
@@ -486,12 +509,14 @@ export function createServer(ctx: ServerContext): McpServer {
         max_rows: config.maxRows,
         max_cell_chars: config.maxCellChars,
         query_timeout_seconds: config.queryTimeoutSeconds,
+        default_catalog: connection.currentSearchPath().catalog ?? null,
+        default_schema: connection.currentSearchPath().schema ?? null,
         transport: ctx.transport,
         mcp_server: `${PACKAGE_NAME} ${PACKAGE_VERSION}`,
         session_warnings: connection.sessionWarnings(),
       };
       const lines = Object.entries(info).map(
-        ([k, v]) => `- ${k}: ${Array.isArray(v) ? (v.length ? v.join("; ") : "none") : String(v)}`,
+        ([k, v]) => `- ${k}: ${Array.isArray(v) ? (v.length ? v.join("; ") : "none") : v === null ? "(not set)" : String(v)}`,
       );
       return text(lines.join("\n"), info);
     }),

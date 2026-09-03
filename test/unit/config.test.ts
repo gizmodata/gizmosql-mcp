@@ -10,6 +10,7 @@ import {
   parseConfig,
   redactSecrets,
   redactedUri,
+  useStatement,
 } from "../../dist/connection.js";
 
 const base = {
@@ -112,6 +113,25 @@ describe("parseConfig", () => {
     assert.equal(t.username, undefined);
     assert.equal(t.password, undefined);
     assert.throws(() => parseConfig({ GIZMOSQL_HOST: "${user_config.host}" }), /GIZMOSQL_HOST is required/);
+  });
+
+  it("parses optional default catalog/schema", () => {
+    const c = parseConfig({ ...base });
+    assert.equal(c.defaultCatalog, undefined);
+    assert.equal(c.defaultSchema, undefined);
+    const d = parseConfig({ ...base, GIZMOSQL_DEFAULT_CATALOG: "lake", GIZMOSQL_DEFAULT_SCHEMA: " sales " });
+    assert.equal(d.defaultCatalog, "lake");
+    assert.equal(d.defaultSchema, "sales");
+    const blank = parseConfig({ ...base, GIZMOSQL_DEFAULT_CATALOG: "${user_config.default_catalog}", GIZMOSQL_DEFAULT_SCHEMA: "" });
+    assert.equal(blank.defaultCatalog, undefined);
+    assert.equal(blank.defaultSchema, undefined);
+  });
+
+  it("builds quoted USE statements", () => {
+    assert.equal(useStatement({}), null);
+    assert.equal(useStatement({ catalog: "lake" }), 'USE "lake"');
+    assert.equal(useStatement({ schema: "sales" }), 'USE "sales"');
+    assert.equal(useStatement({ catalog: "my\"lake", schema: "sales" }), 'USE "my""lake"."sales"');
   });
 
   it("allows no credentials when SSO is enabled", () => {

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "gizmosql",
   "display_name": "GizmoSQL",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Query your GizmoSQL (Arrow Flight SQL / DuckDB) server from Claude.",
   "long_description": "Connects Claude Desktop to a GizmoSQL server over Arrow Flight SQL using the official @gizmodata/gizmosql-client and the native GizmoSQL ADBC driver (bundled for macOS, Windows x64 and Linux).\n\nTools: list catalogs, schemas and tables; describe a table (columns, types, constraints, estimated rows); run parameterised SQL queries with row caps and timeouts; explain a query; server info. Writes are disabled unless you enable them. A `gizmosql://schema/{catalog}/{schema}/{table}` resource returns table DDL.\n\nThe server runs on your machine and connects directly to the GizmoSQL host you configure (VPN / private networks work). Credentials are stored in your OS keychain by Claude Desktop and never appear in tool output or errors.",
   "author": {
@@ -37,7 +37,9 @@
         "GIZMOSQL_MAX_CELL_CHARS": "${user_config.max_cell_chars}",
         "GIZMOSQL_QUERY_TIMEOUT_SECONDS": "${user_config.query_timeout_seconds}",
         "GIZMOSQL_OAUTH_PORT": "${user_config.oauth_port}",
-        "GIZMOSQL_ENABLE_SSO": "${user_config.enable_sso}"
+        "GIZMOSQL_ENABLE_SSO": "${user_config.enable_sso}",
+        "GIZMOSQL_DEFAULT_CATALOG": "${user_config.default_catalog}",
+        "GIZMOSQL_DEFAULT_SCHEMA": "${user_config.default_schema}"
       }
     }
   },
@@ -46,6 +48,7 @@
     { "name": "list_schemas", "description": "List schemas, optionally filtered to one catalog." },
     { "name": "list_tables", "description": "List tables and views (with type), optionally filtered by catalog, schema and a LIKE pattern." },
     { "name": "describe_table", "description": "Columns, types, nullability, constraints and estimated row count for a table or view." },
+    { "name": "use_schema", "description": "Set the session's default catalog and/or schema (DuckDB USE) for unqualified table names." },
     { "name": "run_query", "description": "Run a SQL query (DuckDB dialect) with optional bound parameters; returns a row-capped Markdown table plus JSON." },
     { "name": "explain_query", "description": "Return DuckDB's EXPLAIN plan for a query without executing it." },
     { "name": "execute_statement", "description": "Execute a DML/DDL statement and return the affected-row count (only available when writes are enabled)." },
@@ -72,6 +75,18 @@
       "title": "GizmoSQL host",
       "description": "Hostname or IP address of the GizmoSQL server (reachable from this machine, e.g. over your VPN).",
       "required": true
+    },
+    "default_catalog": {
+      "type": "string",
+      "title": "Default catalog",
+      "description": "Optional catalog (database) to USE at the start of each session. Leave blank for the server default.",
+      "required": false
+    },
+    "default_schema": {
+      "type": "string",
+      "title": "Default schema",
+      "description": "Optional schema to USE at the start of each session. Leave blank for the server default.",
+      "required": false
     },
     "port": {
       "type": "number",

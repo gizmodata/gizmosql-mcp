@@ -151,6 +151,7 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
       "list_tables",
       "run_query",
       "server_info",
+      "use_schema",
     ]);
     const runQuery = (await ro.listTools()).tools.find((t) => t.name === "run_query");
     assert.equal(runQuery?.annotations?.readOnlyHint, true);
@@ -334,8 +335,54 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
     }
   });
 
+  it("applies a default catalog/schema, allows USE in read-only mode, and warns on a bad default", async () => {
+    assert.ok(target);
+    const withDefault = await stdioClient(target, {
+      GIZMOSQL_DEFAULT_CATALOG: "memory",
+      GIZMOSQL_DEFAULT_SCHEMA: "main",
+    });
+    try {
+      const info = await call(withDefault, "server_info");
+      const s = info.structuredContent as {
+        default_catalog: string; default_schema: string; current_catalog: string; current_schema: string; session_warnings: string[];
+      };
+      assert.equal(s.default_catalog, "memory");
+      assert.equal(s.default_schema, "main");
+      assert.equal(s.current_catalog, "memory");
+      assert.equal(s.current_schema, "main");
+      assert.deepEqual(s.session_warnings, []);
+
+      // DuckDB refuses to USE internal catalogs (system/temp), so switch to a user schema.
+      await call(rw, "execute_statement", { sql: "CREATE SCHEMA IF NOT EXISTS mcp_alt" });
+      const used = await call(withDefault, "use_schema", { catalog: "memory", schema: "mcp_alt" });
+      assert.equal(used.isError, undefined, textOf(used));
+      assert.deepEqual(used.structuredContent, { catalog: "memory", schema: "mcp_alt" });
+      const viaSql = await call(withDefault, "run_query", { sql: "USE memory.main" });
+      assert.equal(viaSql.isError, undefined, textOf(viaSql));
+      const after = await call(withDefault, "run_query", { sql: "SELECT current_catalog() AS c, current_schema() AS s" });
+      assert.deepEqual((after.structuredContent as { rows: unknown[][] }).rows, [["memory", "main"]]);
+      const bad = await call(withDefault, "use_schema", { catalog: "no_such_catalog" });
+      assert.equal(bad.isError, true);
+    } finally {
+      await withDefault.close();
+    }
+
+    const badDefault = await stdioClient(target, { GIZMOSQL_DEFAULT_CATALOG: "no_such_catalog" });
+    try {
+      const info = await call(badDefault, "server_info");
+      const s = info.structuredContent as { session_warnings: string[]; current_catalog: string };
+      assert.equal(s.session_warnings.length, 1);
+      assert.match(s.session_warnings[0], /Default catalog\/schema could not be applied/);
+      assert.match(s.session_warnings[0], /Available catalogs: .*memory/);
+      assert.equal(s.current_catalog, "memory");
+    } finally {
+      await badDefault.close();
+    }
+  });
+
   it("cleans up", async () => {
     const dropped = await call(rw, "execute_statement", { sql: "DROP TABLE mcp_it" });
     assert.equal(dropped.isError, undefined, textOf(dropped));
+    await call(rw, "execute_statement", { sql: "DROP SCHEMA IF EXISTS mcp_alt" });
   });
 });

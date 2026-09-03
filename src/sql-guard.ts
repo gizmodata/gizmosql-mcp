@@ -33,7 +33,9 @@ const WRAPPABLE_READ_KEYWORDS = new Set([
 ]);
 
 /** Leading keywords that are reads but cannot be used as a subquery. */
-const UNWRAPPABLE_READ_KEYWORDS = new Set(["EXPLAIN", "PRAGMA"]);
+// USE only changes the session's search path (no data access), so it is
+// allowed in read-only mode.
+const UNWRAPPABLE_READ_KEYWORDS = new Set(["EXPLAIN", "PRAGMA", "USE"]);
 
 /** Everything here is a write / side-effecting statement. */
 const WRITE_KEYWORDS = new Set([
@@ -58,7 +60,6 @@ const WRITE_KEYWORDS = new Set([
   "LOAD",
   "SET",
   "RESET",
-  "USE",
   "CALL",
   "BEGIN",
   "START",
@@ -433,7 +434,7 @@ export function guardStatement(sql: string, allowWrites: boolean): GuardedStatem
       throw new SqlGuardError(
         `Statement type ${classification.keyword} is not allowed: this server is read-only ` +
           "(GIZMOSQL_ALLOW_WRITES is not enabled). Only SELECT/WITH/FROM/VALUES/SHOW/" +
-          "DESCRIBE/SUMMARIZE/EXPLAIN/PRAGMA (read) statements are permitted.",
+          "DESCRIBE/SUMMARIZE/EXPLAIN/PRAGMA (read)/USE statements are permitted.",
       );
     }
     if (classification.kind === "unknown") {

@@ -81,6 +81,8 @@ describe("classifyStatement", () => {
     read("PRAGMA version", false);
     read("PRAGMA table_info('t')", false);
     read("pragma database_size", false);
+    read("USE other", false);
+    read("use main.other", false);
   });
 
   it("treats EXPLAIN of a write and PRAGMA assignments as writes", () => {
@@ -111,7 +113,6 @@ describe("classifyStatement", () => {
       "SET memory_limit = '1GB'",
       "SET gizmosql.query_timeout = 0",
       "RESET memory_limit",
-      "USE other",
       "CALL start_ui()",
       "BEGIN TRANSACTION",
       "COMMIT",

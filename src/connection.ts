@@ -23,6 +23,10 @@ export interface McpConfig {
   mcpBearerToken?: string;
   /** Enables the optional `login_sso` tool (OAuth/SSO browser flow). */
   enableSso: boolean;
+  /** Catalog to `USE` at session start (optional). */
+  defaultCatalog?: string;
+  /** Schema to `USE` at session start (optional). */
+  defaultSchema?: string;
 }
 
 export const DEFAULTS = {
@@ -145,6 +149,8 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
     ),
     mcpBearerToken: nonEmpty(env.GIZMOSQL_MCP_BEARER_TOKEN),
     enableSso,
+    defaultCatalog: nonEmpty(env.GIZMOSQL_DEFAULT_CATALOG),
+    defaultSchema: nonEmpty(env.GIZMOSQL_DEFAULT_SCHEMA),
   };
 }
 
@@ -211,6 +217,24 @@ export interface SessionOverrides {
   password?: string;
 }
 
+/** Session search path applied with `USE` on every (re)connect. */
+export interface SearchPath {
+  catalog?: string;
+  schema?: string;
+}
+
+function quoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
+/** Builds the DuckDB `USE` statement for a search path, or null when empty. */
+export function useStatement(path: SearchPath): string | null {
+  const parts: string[] = [];
+  if (path.catalog) parts.push(quoteIdent(path.catalog));
+  if (path.schema) parts.push(quoteIdent(path.schema));
+  return parts.length ? `USE ${parts.join(".")}` : null;
+}
+
 export interface RunOptions {
   /** Overrides the configured timeout for this operation (seconds; 0 = none). */
   timeoutSeconds?: number;
@@ -230,13 +254,32 @@ export class GizmoConnection {
   private queue: Promise<unknown> = Promise.resolve();
   private overrides: SessionOverrides = {};
   private warnings: string[] = [];
+  private searchPath: SearchPath;
   /** Wall-clock at which the current client was opened (for server_info). */
   connectedAt: Date | null = null;
 
   constructor(
     readonly config: McpConfig,
     private readonly log: (message: string) => void = (m) => console.error(m),
-  ) {}
+  ) {
+    this.searchPath = { catalog: config.defaultCatalog, schema: config.defaultSchema };
+  }
+
+  /** The search path (`USE`) applied to every session. */
+  currentSearchPath(): SearchPath {
+    return { ...this.searchPath };
+  }
+
+  /**
+   * Switches the session's default catalog/schema (`USE`) and remembers it
+   * so reconnects apply it again. Throws when the server rejects it.
+   */
+  async useSchema(path: SearchPath): Promise<void> {
+    const stmt = useStatement(path);
+    if (!stmt) throw new Error("use_schema needs a catalog and/or schema name.");
+    await this.run((c) => c.executeUpdate(stmt));
+    this.searchPath = { ...path };
+  }
 
   /** Secrets to redact from any message that might reach a client. */
   secrets(): Array<string | undefined> {
@@ -300,6 +343,24 @@ export class GizmoConnection {
         this.warnings.push(
           `Server-side query timeout could not be set (server may predate SET gizmosql.query_timeout); ` +
             `falling back to the client-side deadline only. ${msg}`,
+        );
+        this.log(`[gizmosql-mcp] warning: ${this.warnings[this.warnings.length - 1]}`);
+      }
+    }
+    const use = useStatement(this.searchPath);
+    if (use) {
+      try {
+        await client.executeUpdate(use);
+      } catch (err) {
+        const msg = this.redact(err instanceof Error ? err.message : String(err));
+        let available = "";
+        try {
+          available = ` Available catalogs: ${(await client.getCatalogs()).join(", ")}.`;
+        } catch {
+          // best effort
+        }
+        this.warnings.push(
+          `Default catalog/schema could not be applied (${use}); the server's own default is in effect.${available} ${msg}`,
         );
         this.log(`[gizmosql-mcp] warning: ${this.warnings[this.warnings.length - 1]}`);
       }

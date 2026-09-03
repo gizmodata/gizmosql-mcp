@@ -22,6 +22,7 @@ Windows x64.
 | `list_schemas(catalog?)` | Schemas, optionally in one catalog |
 | `list_tables(catalog?, schema?, like?)` | Tables and views with their type; `like` is a SQL LIKE pattern |
 | `describe_table(table, schema?, catalog?)` | Columns, types, nullability, constraints, estimated row count |
+| `use_schema(catalog?, schema?)` | Sets the session's default catalog/schema (DuckDB `USE`) for unqualified table names |
 | `run_query(sql, params?, max_rows?)` | Runs a query; returns a Markdown table plus structured JSON, capped at `max_rows` |
 | `explain_query(sql)` | DuckDB `EXPLAIN` plan without executing |
 | `execute_statement(sql, params?)` | DML/DDL with affected-row count. Only registered when writes are enabled |
@@ -140,6 +141,8 @@ same names.
 | `GIZMOSQL_TOKEN` | | Bearer/JWT token authentication (alternative to username/password) |
 | `GIZMOSQL_PLAINTEXT` | `false` | Connect without TLS (development servers only) |
 | `GIZMOSQL_TLS_SKIP_VERIFY` | `false` | Accept self-signed or untrusted certificates |
+| `GIZMOSQL_DEFAULT_CATALOG` | | Catalog to `USE` at the start of every session (optional) |
+| `GIZMOSQL_DEFAULT_SCHEMA` | | Schema to `USE` at the start of every session (optional) |
 | `GIZMOSQL_ALLOW_WRITES` | `false` | Register `execute_statement` and let `run_query` run non-read statements |
 | `GIZMOSQL_MAX_ROWS` | `500` | Hard cap on rows returned by `run_query` |
 | `GIZMOSQL_MAX_CELL_CHARS` | `200` | Cells longer than this are truncated with `…` |
@@ -149,14 +152,17 @@ same names.
 | `GIZMOSQL_MCP_BEARER_TOKEN` | | HTTP transport only: required bearer token |
 
 Exactly one authentication method must be configured: username and password, a token, or
-SSO. `GIZMOSQL_DRIVER_LIB` can point at a custom `libadbc_driver_gizmosql` build if you
+SSO. The default catalog/schema are optional: when set, the server runs `USE` on each new
+session so unqualified table names resolve there; if the name does not exist the server
+still starts and reports the problem (with the catalogs it found) in `server_info`. In a
+chat, `use_schema` or a plain `USE catalog.schema` switches for the rest of the session. `GIZMOSQL_DRIVER_LIB` can point at a custom `libadbc_driver_gizmosql` build if you
 need one (see the client README).
 
 ## Read-only model and security
 
 By default the server refuses anything that is not a read. `sql-guard.ts` classifies each
 statement and only lets `SELECT`, `WITH … SELECT`, `FROM`, `VALUES`, `SHOW`, `DESCRIBE`,
-`SUMMARIZE`, `EXPLAIN` and read-style `PRAGMA` through. CTEs that end in DML, `COPY`,
+`SUMMARIZE`, `EXPLAIN`, read-style `PRAGMA` and `USE` (search path only) through. CTEs that end in DML, `COPY`,
 `ATTACH`, `INSTALL`, `LOAD`, `SET`, `CALL`, transactions and multi-statement input are all
 rejected. Setting `GIZMOSQL_ALLOW_WRITES=true` lifts that restriction and adds
 `execute_statement`, which is annotated as destructive so clients ask before running it.

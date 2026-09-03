@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-03
+
+### Added
+- Optional default catalog and schema (`GIZMOSQL_DEFAULT_CATALOG`,
+  `GIZMOSQL_DEFAULT_SCHEMA`; extension settings "Default catalog" /
+  "Default schema"). The server runs `USE` on every new session, reports
+  the values in `server_info`, and if the name does not exist it keeps
+  running and lists the available catalogs in `session_warnings`.
+- `use_schema(catalog?, schema?)` tool to switch the session's default
+  catalog/schema from a chat; the choice is re-applied after reconnects.
+
+### Changed
+- `USE` is now allowed in read-only mode (it only changes the session's
+  search path).
+
 ## [0.1.1] - 2026-09-03
 
 ### Fixed
