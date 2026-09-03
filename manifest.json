@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "gizmosql",
   "display_name": "GizmoSQL",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Query your GizmoSQL (Arrow Flight SQL / DuckDB) server from Claude.",
   "long_description": "Connects Claude Desktop to a GizmoSQL server over Arrow Flight SQL using the official @gizmodata/gizmosql-client and the native GizmoSQL ADBC driver (bundled for macOS, Windows x64 and Linux).\n\nTools: list catalogs, schemas and tables; describe a table (columns, types, constraints, estimated rows); run parameterised SQL queries with row caps and timeouts; explain a query; server info. Writes are disabled unless you enable them. A `gizmosql://schema/{catalog}/{schema}/{table}` resource returns table DDL.\n\nThe server runs on your machine and connects directly to the GizmoSQL host you configure (VPN / private networks work). Credentials are stored in your OS keychain by Claude Desktop and never appear in tool output or errors.",
   "author": {

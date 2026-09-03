@@ -558,7 +558,10 @@ export function createServer(ctx: ServerContext): McpServer {
           resources: tables.slice(0, 500).map((t) => ({
             uri: `gizmosql://schema/${encodeURIComponent(t.catalog)}/${encodeURIComponent(t.schema)}/${encodeURIComponent(t.tableName)}`,
             name: `${t.catalog}.${t.schema}.${t.tableName}`,
-            description: `${t.tableType} DDL`,
+            // Clients (e.g. Claude Desktop's resource picker) display `title`;
+            // without it they fall back to the template's title for every entry.
+            title: `${t.catalog}.${t.schema}.${t.tableName}`,
+            description: `DDL of ${t.tableType.toLowerCase()} ${t.catalog}.${t.schema}.${t.tableName}`,
             mimeType: "text/plain",
           })),
         };

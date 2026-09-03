@@ -287,7 +287,10 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
 
   it("serves table DDL as a resource", async () => {
     const listed = await ro.listResources();
-    assert.ok(listed.resources.some((r) => r.uri === "gizmosql://schema/memory/main/mcp_it"));
+    const entry = listed.resources.find((r) => r.uri === "gizmosql://schema/memory/main/mcp_it");
+    assert.ok(entry);
+    assert.equal(entry.title, "memory.main.mcp_it");
+    assert.equal(entry.name, "memory.main.mcp_it");
     const read = await ro.readResource({ uri: "gizmosql://schema/memory/main/mcp_it" });
     const text = (read.contents[0] as { text: string }).text;
     assert.match(text, /CREATE TABLE mcp_it/);
