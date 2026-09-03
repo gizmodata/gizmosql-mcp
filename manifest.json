@@ -57,7 +57,7 @@
   "license": "Apache-2.0",
   "privacy_policies": [
     "https://github.com/gizmodata/gizmosql-mcp#privacy-policy",
-    "https://gizmodata.com/privacy"
+    "https://gizmodata.com/privacy-policy"
   ],
   "compatibility": {
     "claude_desktop": ">=1.0.0",

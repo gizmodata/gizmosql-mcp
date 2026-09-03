@@ -288,7 +288,7 @@ provider in your browser).
 - **Data retention.** The extension retains no data between runs. Your GizmoSQL server
   may log queries according to its own configuration.
 - **Contact.** privacy questions: info@gizmodata.com. GizmoData's general privacy policy is
-  at <https://gizmodata.com/privacy>.
+  at <https://gizmodata.com/privacy-policy>.
 
 ## License
 
