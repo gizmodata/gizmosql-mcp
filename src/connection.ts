@@ -4,7 +4,7 @@
 import { FlightSQLClient, QueryCancelledError, type SqlParameters } from "@gizmodata/gizmosql-client";
 import { Table, type RecordBatch } from "apache-arrow";
 
-export type AuthMethod = "password" | "token" | "none";
+export type AuthMethod = "password" | "none";
 
 /** Settings for one GizmoSQL server. */
 export interface ConnectionConfig {
@@ -12,9 +12,13 @@ export interface ConnectionConfig {
   name: string;
   host: string;
   port: number;
+  /**
+   * Username for basic authentication. GizmoSQL's JWT/SSO scheme uses the
+   * username `token` with the JWT as the password, so no separate bearer
+   * option exists here.
+   */
   username?: string;
   password?: string;
-  token?: string;
   plaintext: boolean;
   tlsSkipVerify: boolean;
   oauthPort: number;
@@ -131,22 +135,16 @@ function parseConnection(
   const username = nonEmpty(v("USERNAME"));
   const rawPassword = v("PASSWORD");
   const password = isUnset(rawPassword) && rawPassword !== "" ? undefined : rawPassword;
-  const token = nonEmpty(v("TOKEN"));
 
   const hasPassword = username !== undefined || (password !== undefined && password !== "");
-  const hasToken = token !== undefined;
-  if (hasPassword && hasToken) {
-    throw new ConfigError(
-      `Connection "${name}": set either ${prefix}USERNAME/${prefix}PASSWORD or ${prefix}TOKEN, not both.`,
-    );
-  }
   if (hasPassword && (username === undefined || password === undefined)) {
     throw new ConfigError(`Connection "${name}": ${prefix}USERNAME and ${prefix}PASSWORD must be set together.`);
   }
-  if (!hasPassword && !hasToken && !globals.enableSso) {
+  if (!hasPassword && !globals.enableSso) {
     throw new ConfigError(
-      `Connection "${name}" (${label}) has no credentials: set ${prefix}USERNAME + ${prefix}PASSWORD, or ` +
-        `${prefix}TOKEN (or GIZMOSQL_ENABLE_SSO=true to sign in with the login_sso tool).`,
+      `Connection "${name}" (${label}) has no credentials: set ${prefix}USERNAME + ${prefix}PASSWORD ` +
+        `(for a GizmoSQL JWT use username "token" and the JWT as the password), or GIZMOSQL_ENABLE_SSO=true ` +
+        "to sign in with the login_sso tool.",
     );
   }
   return {
@@ -155,7 +153,6 @@ function parseConnection(
     port: parseInteger(`${prefix}PORT`, v("PORT"), DEFAULTS.port, { min: 1, max: 65535 }),
     username: hasPassword ? username : undefined,
     password: hasPassword ? password : undefined,
-    token: hasToken ? token : undefined,
     plaintext: parseBoolean(`${prefix}PLAINTEXT`, v("PLAINTEXT"), false),
     tlsSkipVerify: parseBoolean(`${prefix}TLS_SKIP_VERIFY`, v("TLS_SKIP_VERIFY"), false),
     oauthPort: parseInteger(`${prefix}OAUTH_PORT`, v("OAUTH_PORT"), DEFAULTS.oauthPort, { min: 1, max: 65535 }),
@@ -235,15 +232,14 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
   };
 }
 
-export function authMethod(config: Pick<ConnectionConfig, "username" | "password" | "token">): AuthMethod {
-  if (config.token) return "token";
+export function authMethod(config: Pick<ConnectionConfig, "username" | "password">): AuthMethod {
   if (config.username !== undefined) return "password";
   return "none";
 }
 
-/** Connection URI with the password/token never included. */
+/** Connection URI with the password never included. */
 export function redactedUri(config: ConnectionConfig, overrideUser?: string): string {
-  const user = overrideUser ?? (authMethod(config) === "token" ? "token" : config.username);
+  const user = overrideUser ?? config.username;
   const cred = user ? `${encodeURIComponent(user)}:***@` : "";
   const transport = config.plaintext ? "?transport=tcp" : "";
   return `gizmosql://${cred}${config.host}:${config.port}${transport}`;
@@ -364,7 +360,7 @@ export class GizmoConnection {
 
   /** Secrets to redact from any message that might reach a client. */
   secrets(): Array<string | undefined> {
-    return [this.config.password, this.config.token, this.overrides.password];
+    return [this.config.password, this.overrides.password];
   }
 
   redact(text: string): string {
@@ -402,7 +398,6 @@ export class GizmoConnection {
     if (this.overrides.username !== undefined) {
       return { ...base, username: this.overrides.username, password: this.overrides.password ?? "" };
     }
-    if (this.config.token) return { ...base, token: this.config.token };
     if (this.config.username !== undefined) {
       return { ...base, username: this.config.username, password: this.config.password ?? "" };
     }

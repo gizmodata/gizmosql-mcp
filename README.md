@@ -151,8 +151,7 @@ same names.
 | `GIZMOSQL_HOST` | required | Hostname or IP of the GizmoSQL server |
 | `GIZMOSQL_CONNECTION_NAME` | `default` | Name of this connection (used with the `connection` tool argument) |
 | `GIZMOSQL_PORT` | `31337` | Flight SQL port |
-| `GIZMOSQL_USERNAME` / `GIZMOSQL_PASSWORD` | | Basic authentication |
-| `GIZMOSQL_TOKEN` | | Bearer/JWT token authentication (alternative to username/password) |
+| `GIZMOSQL_USERNAME` / `GIZMOSQL_PASSWORD` | | Credentials. For a GizmoSQL JWT (token auth or SSO), the username is `token` and the password is the JWT |
 | `GIZMOSQL_PLAINTEXT` | `false` | Connect without TLS (development servers only) |
 | `GIZMOSQL_TLS_SKIP_VERIFY` | `false` | Accept self-signed or untrusted certificates |
 | `GIZMOSQL_DEFAULT_CATALOG` | | Catalog to `USE` at the start of every session (optional) |
@@ -167,8 +166,9 @@ same names.
 | `GIZMOSQL_2_HOST`, `GIZMOSQL_3_HOST`, … | | Additional connections, see below |
 | `GIZMOSQL_CONNECTIONS` | | Comma-separated names of further connections, see below |
 
-Exactly one authentication method must be configured per connection: username and
-password, a token, or SSO. The default catalog/schema are optional: when set, the server runs `USE` on each new
+Every connection needs a username and password (or SSO via `login_sso`). GizmoSQL's
+token authentication is a form of basic authentication: username `token`, password = the
+JWT, so there is no separate token setting. The default catalog/schema are optional: when set, the server runs `USE` on each new
 session so unqualified table names resolve there; if the name does not exist the server
 still starts and reports the problem (with the catalogs it found) in `server_info`. In a
 chat, `use_schema` or a plain `USE catalog.schema` switches for the rest of the session. `GIZMOSQL_DRIVER_LIB` can point at a custom `libadbc_driver_gizmosql` build if you
@@ -185,14 +185,14 @@ credentials.
   defaults to `default` (the **Connection name** setting changes it).
 - **Environment variables.** The slots map to `GIZMOSQL_2_*` and `GIZMOSQL_3_*`
   (`GIZMOSQL_2_HOST`, `GIZMOSQL_2_NAME`, `GIZMOSQL_2_USERNAME`, `GIZMOSQL_2_PASSWORD`,
-  `GIZMOSQL_2_TOKEN`, `GIZMOSQL_2_PORT`, `GIZMOSQL_2_PLAINTEXT`, `GIZMOSQL_2_TLS_SKIP_VERIFY`,
+  `GIZMOSQL_2_PORT`, `GIZMOSQL_2_PLAINTEXT`, `GIZMOSQL_2_TLS_SKIP_VERIFY`,
   `GIZMOSQL_2_DEFAULT_CATALOG`, `GIZMOSQL_2_DEFAULT_SCHEMA`). For any number of servers, list
   names in `GIZMOSQL_CONNECTIONS` and define each one with the same variables prefixed by the
   upper-cased name, for example:
 
   ```bash
   GIZMOSQL_CONNECTIONS=prod,dev-eu
-  GIZMOSQL_PROD_HOST=gizmosql.prod.example.com   GIZMOSQL_PROD_TOKEN=...
+  GIZMOSQL_PROD_HOST=gizmosql.prod.example.com   GIZMOSQL_PROD_USERNAME=token GIZMOSQL_PROD_PASSWORD=<jwt>
   GIZMOSQL_DEV_EU_HOST=gizmosql.dev.example.com  GIZMOSQL_DEV_EU_USERNAME=... GIZMOSQL_DEV_EU_PASSWORD=...
   ```
 
@@ -223,8 +223,8 @@ the privileges of the GizmoSQL user the server connects as:
   `role` claim (or the server's `--token-default-role`) decides the role, and GizmoSQL's
   built-in `readonly` role only permits `SELECT` queries. Mint a token with
   `role: readonly` (for example with
-  [`generate-gizmosql-token`](https://docs.gizmosql.com/token_authentication/)) and set
-  `GIZMOSQL_TOKEN`. GizmoSQL Enterprise adds per-catalog read/write/none permissions in the
+  [`generate-gizmosql-token`](https://docs.gizmosql.com/token_authentication/)) and
+  configure username `token` with the JWT as the password. GizmoSQL Enterprise adds per-catalog read/write/none permissions in the
   token as well. See the [security guide](https://docs.gizmosql.com/security/).
 
 Other guarantees:
@@ -266,9 +266,9 @@ TLS still works through the tunnel; the certificate is validated against the hos
 connect to, so you may need `GIZMOSQL_TLS_SKIP_VERIFY=true` when the certificate was issued
 for the internal name.
 
-**Authentication failures.** `server_info` shows the user and auth method the server is
-using. Basic auth needs both username and password; token auth uses only
-`GIZMOSQL_TOKEN`. With SSO, run `login_sso` first.
+**Authentication failures.** `server_info` shows the user the server is connected as.
+Username and password must both be set; for a JWT the username is `token` and the
+password is the JWT. With SSO, run `login_sso` first.
 
 **Tools do not appear in the chat.** Open the **+** menu in the chat, choose Connectors and
 enable GizmoSQL. After changing settings, start a new chat.

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "gizmosql",
   "display_name": "GizmoSQL",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Query your GizmoSQL (Arrow Flight SQL / DuckDB) server from Claude.",
   "long_description": "Connects Claude Desktop to a GizmoSQL server over Arrow Flight SQL using the official @gizmodata/gizmosql-client and the native GizmoSQL ADBC driver (bundled for macOS, Windows x64 and Linux).\n\nTools: list catalogs, schemas and tables; describe a table (columns, types, constraints, estimated rows); run parameterised SQL queries with row caps and timeouts; explain a query; server info. Writes are disabled unless you enable them. A `gizmosql://schema/{catalog}/{schema}/{table}` resource returns table DDL.\n\nUp to three GizmoSQL servers can be configured; every tool takes an optional connection argument and use_connection switches the default.\n\nThe server runs on your machine and connects directly to the GizmoSQL host you configure (VPN / private networks work). Credentials are stored in your OS keychain by Claude Desktop and never appear in tool output or errors.",
   "author": {
@@ -31,7 +31,6 @@
         "GIZMOSQL_PORT": "${user_config.port}",
         "GIZMOSQL_USERNAME": "${user_config.username}",
         "GIZMOSQL_PASSWORD": "${user_config.password}",
-        "GIZMOSQL_TOKEN": "${user_config.token}",
         "GIZMOSQL_PLAINTEXT": "${user_config.plaintext}",
         "GIZMOSQL_TLS_SKIP_VERIFY": "${user_config.tls_skip_verify}",
         "GIZMOSQL_ALLOW_WRITES": "${user_config.allow_writes}",
@@ -48,7 +47,6 @@
         "GIZMOSQL_2_PORT": "${user_config.connection2_port}",
         "GIZMOSQL_2_USERNAME": "${user_config.connection2_username}",
         "GIZMOSQL_2_PASSWORD": "${user_config.connection2_password}",
-        "GIZMOSQL_2_TOKEN": "${user_config.connection2_token}",
         "GIZMOSQL_2_PLAINTEXT": "${user_config.connection2_plaintext}",
         "GIZMOSQL_2_TLS_SKIP_VERIFY": "${user_config.connection2_tls_skip_verify}",
         "GIZMOSQL_2_DEFAULT_CATALOG": "${user_config.connection2_default_catalog}",
@@ -58,7 +56,6 @@
         "GIZMOSQL_3_PORT": "${user_config.connection3_port}",
         "GIZMOSQL_3_USERNAME": "${user_config.connection3_username}",
         "GIZMOSQL_3_PASSWORD": "${user_config.connection3_password}",
-        "GIZMOSQL_3_TOKEN": "${user_config.connection3_token}",
         "GIZMOSQL_3_PLAINTEXT": "${user_config.connection3_plaintext}",
         "GIZMOSQL_3_TLS_SKIP_VERIFY": "${user_config.connection3_tls_skip_verify}",
         "GIZMOSQL_3_DEFAULT_CATALOG": "${user_config.connection3_default_catalog}",
@@ -180,21 +177,14 @@
     "username": {
       "type": "string",
       "title": "Username",
-      "description": "Username for basic authentication (leave blank when using a token or SSO). A read-only role is recommended.",
+      "description": "Username for basic authentication. For a GizmoSQL JWT/SSO token, enter the username \"token\" and paste the JWT as the password. A read-only role is recommended.",
       "sensitive": true,
       "required": false
     },
     "password": {
       "type": "string",
       "title": "Password",
-      "description": "Password for basic authentication.",
-      "sensitive": true,
-      "required": false
-    },
-    "token": {
-      "type": "string",
-      "title": "Bearer token",
-      "description": "JWT/bearer token for token authentication (alternative to username/password).",
+      "description": "Password for basic authentication (or the JWT when the username is \"token\").",
       "sensitive": true,
       "required": false
     },
@@ -286,21 +276,14 @@
     "connection2_username": {
       "type": "string",
       "title": "Connection 2: username",
-      "description": "Username for basic authentication (leave blank when using a token).",
+      "description": "Username for basic authentication (use \"token\" with a JWT as the password).",
       "sensitive": true,
       "required": false
     },
     "connection2_password": {
       "type": "string",
       "title": "Connection 2: password",
-      "description": "Password for basic authentication.",
-      "sensitive": true,
-      "required": false
-    },
-    "connection2_token": {
-      "type": "string",
-      "title": "Connection 2: bearer token",
-      "description": "JWT/bearer token (alternative to username/password).",
+      "description": "Password for basic authentication (or the JWT when the username is \"token\").",
       "sensitive": true,
       "required": false
     },
@@ -354,21 +337,14 @@
     "connection3_username": {
       "type": "string",
       "title": "Connection 3: username",
-      "description": "Username for basic authentication (leave blank when using a token).",
+      "description": "Username for basic authentication (use \"token\" with a JWT as the password).",
       "sensitive": true,
       "required": false
     },
     "connection3_password": {
       "type": "string",
       "title": "Connection 3: password",
-      "description": "Password for basic authentication.",
-      "sensitive": true,
-      "required": false
-    },
-    "connection3_token": {
-      "type": "string",
-      "title": "Connection 3: bearer token",
-      "description": "JWT/bearer token (alternative to username/password).",
+      "description": "Password for basic authentication (or the JWT when the username is \"token\").",
       "sensitive": true,
       "required": false
     },

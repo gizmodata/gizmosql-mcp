@@ -33,7 +33,6 @@ describe("parseConfig", () => {
     assert.equal(c.port, DEFAULTS.port);
     assert.equal(c.username, "alice");
     assert.equal(c.password, "p@ss word");
-    assert.equal(c.token, undefined);
     assert.equal(c.plaintext, false);
     assert.equal(c.tlsSkipVerify, false);
     assert.equal(c.oauthPort, DEFAULTS.oauthPort);
@@ -50,7 +49,8 @@ describe("parseConfig", () => {
     const cfg = parseConfig({
       GIZMOSQL_HOST: "h",
       GIZMOSQL_PORT: "31338",
-      GIZMOSQL_TOKEN: "tok",
+      GIZMOSQL_USERNAME: "token",
+      GIZMOSQL_PASSWORD: "jwt",
       GIZMOSQL_PLAINTEXT: "true",
       GIZMOSQL_TLS_SKIP_VERIFY: "1",
       GIZMOSQL_ALLOW_WRITES: "yes",
@@ -64,8 +64,8 @@ describe("parseConfig", () => {
     const c = cfg.connections[0];
     assert.equal(c.name, "prod");
     assert.equal(c.port, 31338);
-    assert.equal(c.token, "tok");
-    assert.equal(c.username, undefined);
+    assert.equal(c.username, "token");
+    assert.equal(c.password, "jwt");
     assert.equal(c.plaintext, true);
     assert.equal(c.tlsSkipVerify, true);
     assert.equal(c.oauthPort, 1234);
@@ -80,7 +80,7 @@ describe("parseConfig", () => {
   it("requires a host and exactly one auth method", () => {
     assert.throws(() => parseConfig({}), /GIZMOSQL_HOST is required/);
     assert.throws(() => parseConfig({ GIZMOSQL_HOST: "h" }), /no credentials/);
-    assert.throws(() => parseConfig({ ...base, GIZMOSQL_TOKEN: "t" }), /not both/);
+    assert.throws(() => parseConfig({ GIZMOSQL_HOST: "h" }), /username "token" and the JWT as the password/);
     assert.throws(() => parseConfig({ GIZMOSQL_HOST: "h", GIZMOSQL_USERNAME: "u" }), /must be set together/);
     assert.throws(() => parseConfig({ GIZMOSQL_HOST: "h", GIZMOSQL_PASSWORD: "p" }), /must be set together/);
   });
@@ -96,24 +96,18 @@ describe("parseConfig", () => {
       GIZMOSQL_HOST: "h",
       GIZMOSQL_USERNAME: "u",
       GIZMOSQL_PASSWORD: "p",
-      GIZMOSQL_TOKEN: "${user_config.token}",
       GIZMOSQL_PORT: "${user_config.port}",
       GIZMOSQL_PLAINTEXT: "${user_config.plaintext}",
       GIZMOSQL_2_HOST: "${user_config.connection2_host}",
       GIZMOSQL_2_NAME: "${user_config.connection2_name}",
     });
-    assert.equal(c.token, undefined);
     assert.equal(c.username, "u");
     assert.equal(c.port, DEFAULTS.port);
     assert.equal(c.plaintext, false);
-    const t = first({
-      GIZMOSQL_HOST: "h",
-      GIZMOSQL_USERNAME: "${user_config.username}",
-      GIZMOSQL_PASSWORD: "${user_config.password}",
-      GIZMOSQL_TOKEN: "tok",
-    });
-    assert.equal(t.token, "tok");
-    assert.equal(t.username, undefined);
+    assert.throws(
+      () => parseConfig({ GIZMOSQL_HOST: "h", GIZMOSQL_USERNAME: "${user_config.username}", GIZMOSQL_PASSWORD: "${user_config.password}" }),
+      /no credentials/,
+    );
     assert.throws(() => parseConfig({ GIZMOSQL_HOST: "${user_config.host}" }), /GIZMOSQL_HOST is required/);
   });
 
@@ -153,7 +147,8 @@ describe("parseConfig", () => {
       const cfg = parseConfig({
         ...base,
         GIZMOSQL_2_HOST: "h2",
-        GIZMOSQL_2_TOKEN: "t2",
+        GIZMOSQL_2_USERNAME: "token",
+        GIZMOSQL_2_PASSWORD: "jwt2",
         GIZMOSQL_2_PORT: "444",
         GIZMOSQL_2_DEFAULT_CATALOG: "lake",
         GIZMOSQL_3_HOST: "h3",
@@ -163,7 +158,7 @@ describe("parseConfig", () => {
         GIZMOSQL_3_PLAINTEXT: "true",
       });
       assert.deepEqual(cfg.connections.map((c) => c.name), ["default", "server2", "Staging"]);
-      assert.equal(cfg.connections[1].token, "t2");
+      assert.equal(cfg.connections[1].username, "token");
       assert.equal(cfg.connections[1].port, 444);
       assert.equal(cfg.connections[1].defaultCatalog, "lake");
       assert.equal(cfg.connections[2].plaintext, true);
@@ -171,7 +166,7 @@ describe("parseConfig", () => {
     });
 
     it("ignores slots without a host", () => {
-      const cfg = parseConfig({ ...base, GIZMOSQL_2_NAME: "ghost", GIZMOSQL_2_TOKEN: "x", GIZMOSQL_3_PORT: "1" });
+      const cfg = parseConfig({ ...base, GIZMOSQL_2_NAME: "ghost", GIZMOSQL_2_PASSWORD: "x", GIZMOSQL_3_PORT: "1" });
       assert.equal(cfg.connections.length, 1);
     });
 
@@ -180,7 +175,8 @@ describe("parseConfig", () => {
         ...base,
         GIZMOSQL_CONNECTIONS: "prod, dev-eu",
         GIZMOSQL_PROD_HOST: "prod.internal",
-        GIZMOSQL_PROD_TOKEN: "pt",
+        GIZMOSQL_PROD_USERNAME: "token",
+        GIZMOSQL_PROD_PASSWORD: "pt",
         GIZMOSQL_DEV_EU_HOST: "dev.internal",
         GIZMOSQL_DEV_EU_USERNAME: "d",
         GIZMOSQL_DEV_EU_PASSWORD: "dp",
@@ -191,7 +187,7 @@ describe("parseConfig", () => {
     });
 
     it("a listed connection without a host is ignored, and the primary may be absent when others exist", () => {
-      const cfg = parseConfig({ GIZMOSQL_CONNECTIONS: "prod", GIZMOSQL_PROD_HOST: "p", GIZMOSQL_PROD_TOKEN: "t" });
+      const cfg = parseConfig({ GIZMOSQL_CONNECTIONS: "prod", GIZMOSQL_PROD_HOST: "p", GIZMOSQL_PROD_USERNAME: "u", GIZMOSQL_PROD_PASSWORD: "t" });
       assert.deepEqual(cfg.connections.map((c) => c.name), ["prod"]);
     });
 
@@ -201,11 +197,11 @@ describe("parseConfig", () => {
         /Connection "server2" \(GIZMOSQL_2_HOST\) has no credentials/,
       );
       assert.throws(
-        () => parseConfig({ ...base, GIZMOSQL_2_HOST: "h2", GIZMOSQL_2_TOKEN: "t", GIZMOSQL_2_NAME: "DEFAULT" }),
+        () => parseConfig({ ...base, GIZMOSQL_2_HOST: "h2", GIZMOSQL_2_USERNAME: "u", GIZMOSQL_2_PASSWORD: "t", GIZMOSQL_2_NAME: "DEFAULT" }),
         /used more than once/,
       );
       assert.throws(
-        () => parseConfig({ ...base, GIZMOSQL_2_HOST: "h2", GIZMOSQL_2_TOKEN: "t", GIZMOSQL_2_NAME: "bad name!" }),
+        () => parseConfig({ ...base, GIZMOSQL_2_HOST: "h2", GIZMOSQL_2_USERNAME: "u", GIZMOSQL_2_PASSWORD: "t", GIZMOSQL_2_NAME: "bad name!" }),
         /must be 1-64 letters/,
       );
     });
@@ -213,13 +209,13 @@ describe("parseConfig", () => {
 });
 
 describe("redaction", () => {
-  it("never includes the password or token in the URI", () => {
+  it("never includes the password in the URI", () => {
     const c = parseConfig({ ...base }).connections[0];
     assert.equal(redactedUri(c), "gizmosql://alice:***@db.internal:31337");
-    const t = parseConfig({ GIZMOSQL_HOST: "h", GIZMOSQL_TOKEN: "secret-token", GIZMOSQL_PLAINTEXT: "1" }).connections[0];
+    const t = parseConfig({ GIZMOSQL_HOST: "h", GIZMOSQL_USERNAME: "token", GIZMOSQL_PASSWORD: "secret-jwt", GIZMOSQL_PLAINTEXT: "1" }).connections[0];
     const uri = redactedUri(t);
     assert.equal(uri, "gizmosql://token:***@h:31337?transport=tcp");
-    assert.ok(!uri.includes("secret-token"));
+    assert.ok(!uri.includes("secret-jwt"));
   });
 
   it("redacts raw and URL-encoded secrets from messages", () => {
