@@ -44,8 +44,8 @@ const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off", ""]);
 
 export function parseBoolean(name: string, raw: string | undefined, fallback: boolean): boolean {
-  if (raw === undefined) return fallback;
-  const v = raw.trim().toLowerCase();
+  if (isUnset(raw)) return fallback;
+  const v = raw!.trim().toLowerCase();
   if (TRUE_VALUES.has(v)) return true;
   if (FALSE_VALUES.has(v)) return false;
   throw new ConfigError(`${name} must be true/false (got "${raw}").`);
@@ -57,8 +57,8 @@ export function parseInteger(
   fallback: number,
   { min, max }: { min: number; max?: number },
 ): number {
-  if (raw === undefined || raw.trim() === "") return fallback;
-  const n = Number(raw.trim());
+  if (isUnset(raw)) return fallback;
+  const n = Number(raw!.trim());
   if (!Number.isInteger(n) || n < min || (max !== undefined && n > max)) {
     const range = max === undefined ? `>= ${min}` : `between ${min} and ${max}`;
     throw new ConfigError(`${name} must be an integer ${range} (got "${raw}").`);
@@ -66,10 +66,22 @@ export function parseInteger(
   return n;
 }
 
-function nonEmpty(raw: string | undefined): string | undefined {
-  if (raw === undefined) return undefined;
+/**
+ * Unsubstituted MCPB template placeholders. Claude Desktop passes the
+ * literal `${user_config.<key>}` for optional settings the user left
+ * blank, which must count as "not set".
+ */
+const TEMPLATE_PLACEHOLDER = /^\$\{[^}]*\}$/u;
+
+/** True when an env value should be treated as absent. */
+export function isUnset(raw: string | undefined): boolean {
+  if (raw === undefined) return true;
   const v = raw.trim();
-  return v === "" ? undefined : v;
+  return v === "" || TEMPLATE_PLACEHOLDER.test(v);
+}
+
+function nonEmpty(raw: string | undefined): string | undefined {
+  return isUnset(raw) ? undefined : raw!.trim();
 }
 
 /** Builds the effective configuration from environment variables. */
@@ -79,7 +91,9 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
     throw new ConfigError("GIZMOSQL_HOST is required (hostname or IP of the GizmoSQL server).");
   }
   const username = nonEmpty(env.GIZMOSQL_USERNAME);
-  const password = env.GIZMOSQL_PASSWORD !== undefined ? env.GIZMOSQL_PASSWORD : undefined;
+  const password = isUnset(env.GIZMOSQL_PASSWORD) && env.GIZMOSQL_PASSWORD !== ""
+    ? undefined
+    : env.GIZMOSQL_PASSWORD;
   const token = nonEmpty(env.GIZMOSQL_TOKEN);
   const enableSso = parseBoolean("GIZMOSQL_ENABLE_SSO", env.GIZMOSQL_ENABLE_SSO, false);
 

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-03
+
+### Fixed
+- Claude Desktop passes the literal `${user_config.<key>}` placeholder for
+  optional settings left blank (e.g. the bearer token when using a
+  username/password). These are now treated as unset; previously the
+  server exited at startup with "Set either GIZMOSQL_USERNAME/
+  GIZMOSQL_PASSWORD or GIZMOSQL_TOKEN, not both" and Desktop showed
+  "Unable to connect to extension server".
+
 ## [0.1.0] - 2026-09-03
 
 ### Added

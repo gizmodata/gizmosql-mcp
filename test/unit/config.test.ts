@@ -87,6 +87,33 @@ describe("parseConfig", () => {
     assert.equal(c.password, "");
   });
 
+  it("treats unsubstituted MCPB placeholders as unset (Claude Desktop passes them for blank fields)", () => {
+    const c = parseConfig({
+      GIZMOSQL_HOST: "h",
+      GIZMOSQL_USERNAME: "u",
+      GIZMOSQL_PASSWORD: "p",
+      GIZMOSQL_TOKEN: "${user_config.token}",
+      GIZMOSQL_PORT: "${user_config.port}",
+      GIZMOSQL_PLAINTEXT: "${user_config.plaintext}",
+      GIZMOSQL_MAX_ROWS: "${user_config.max_rows}",
+    });
+    assert.equal(c.token, undefined);
+    assert.equal(c.username, "u");
+    assert.equal(c.port, DEFAULTS.port);
+    assert.equal(c.plaintext, false);
+    assert.equal(c.maxRows, DEFAULTS.maxRows);
+    const t = parseConfig({
+      GIZMOSQL_HOST: "h",
+      GIZMOSQL_USERNAME: "${user_config.username}",
+      GIZMOSQL_PASSWORD: "${user_config.password}",
+      GIZMOSQL_TOKEN: "tok",
+    });
+    assert.equal(t.token, "tok");
+    assert.equal(t.username, undefined);
+    assert.equal(t.password, undefined);
+    assert.throws(() => parseConfig({ GIZMOSQL_HOST: "${user_config.host}" }), /GIZMOSQL_HOST is required/);
+  });
+
   it("allows no credentials when SSO is enabled", () => {
     const c = parseConfig({ GIZMOSQL_HOST: "h", GIZMOSQL_ENABLE_SSO: "true" });
     assert.equal(c.enableSso, true);
