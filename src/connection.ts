@@ -1,8 +1,8 @@
 // Configuration parsing, credential redaction, and the single lazily
 // opened FlightSQLClient shared by the whole server process.
 
-import { FlightSQLClient, type SqlParameters } from "@gizmodata/gizmosql-client";
-import type { Table } from "apache-arrow";
+import { FlightSQLClient, QueryCancelledError, type SqlParameters } from "@gizmodata/gizmosql-client";
+import { Table, type RecordBatch } from "apache-arrow";
 
 export type AuthMethod = "password" | "token" | "none";
 
@@ -169,6 +169,18 @@ export class QueryTimeoutError extends Error {
   }
 }
 
+/** Grace added to the server-side timeout before the client-side abort fires. */
+const CLIENT_DEADLINE_GRACE_MS = 5000;
+/** If an abort does not settle the call (e.g. a DoPut update), drop the connection after this. */
+const HARD_RESET_GRACE_MS = 15000;
+
+/** A capped result: up to `maxRows + 1` rows so callers can detect truncation. */
+export interface CappedResult {
+  table: Table;
+  /** True when more rows existed beyond `maxRows` (the extra row is not in `table`). */
+  truncated: boolean;
+}
+
 const CONNECTION_LOST = /unavailable|connection (?:refused|reset|closed|lost)|transport is closing|broken pipe|\bEOF\b|not connected|failed to connect|socket hang up|ECONNRESET|ECONNREFUSED|EPIPE|canceled|deadline exceeded|no connection/i;
 
 /** Heuristic: does this error indicate the underlying connection is unusable? */
@@ -192,9 +204,11 @@ export interface RunOptions {
 
 /**
  * One FlightSQLClient per process, opened lazily, serialized so a single
- * statement is in flight at a time, reconnected once on connection loss,
- * and torn down (which cancels the in-flight statement server-side) when
- * a client-side deadline fires.
+ * statement is in flight at a time, reconnected once on connection loss.
+ * Timeouts are enforced server-side (`SET gizmosql.query_timeout`) with a
+ * client-side deadline as backstop that cancels the statement through the
+ * client's AbortSignal support; only if that fails to settle the call is
+ * the connection dropped and reopened.
  */
 export class GizmoConnection {
   private client: FlightSQLClient | null = null;
@@ -317,19 +331,22 @@ export class GizmoConnection {
   /**
    * Runs `fn` against the shared client with: serialization, one retry
    * after a connection-level failure, and a client-side deadline that
-   * tears the connection down when it fires.
+   * aborts the statement via `signal` (falling back to dropping the
+   * connection if the abort does not settle the call).
    */
-  async run<T>(fn: (client: FlightSQLClient) => Promise<T>, options: RunOptions = {}): Promise<T> {
+  async run<T>(
+    fn: (client: FlightSQLClient, signal: AbortSignal | undefined) => Promise<T>,
+    options: RunOptions = {},
+  ): Promise<T> {
     const task = async (): Promise<T> => {
       let attempt = 0;
       for (;;) {
         attempt++;
         const client = await this.get();
         try {
-          return await this.withDeadline(fn(client), options.timeoutSeconds);
+          return await this.withDeadline((signal) => fn(client, signal), options.timeoutSeconds);
         } catch (err) {
           if (err instanceof QueryTimeoutError) {
-            await this.reset();
             throw err;
           }
           if (attempt < 2 && isConnectionError(err)) {
@@ -348,30 +365,72 @@ export class GizmoConnection {
     return result;
   }
 
-  private async withDeadline<T>(promise: Promise<T>, timeoutSeconds?: number): Promise<T> {
+  private async withDeadline<T>(
+    fn: (signal: AbortSignal | undefined) => Promise<T>,
+    timeoutSeconds?: number,
+  ): Promise<T> {
     const seconds = timeoutSeconds ?? this.config.queryTimeoutSeconds;
-    if (!seconds || seconds <= 0) return promise;
+    if (!seconds || seconds <= 0) return fn(undefined);
     // The server enforces `gizmosql.query_timeout` at `seconds`; the
-    // client-side deadline is a backstop a few seconds later.
-    const ms = seconds * 1000 + 5000;
-    let timer: NodeJS.Timeout | undefined;
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new QueryTimeoutError(seconds)), ms);
+    // client-side abort is a backstop a few seconds later.
+    const controller = new AbortController();
+    const timeoutError = new QueryTimeoutError(seconds);
+    let abortTimer: NodeJS.Timeout | undefined;
+    let resetTimer: NodeJS.Timeout | undefined;
+    const hardReset = new Promise<never>((_, reject) => {
+      abortTimer = setTimeout(() => {
+        controller.abort(timeoutError);
+        // If the abort cannot interrupt the call (e.g. a DoPut update),
+        // drop the connection so the server sees the client go away.
+        resetTimer = setTimeout(() => {
+          void this.reset().finally(() => reject(timeoutError));
+        }, HARD_RESET_GRACE_MS);
+      }, seconds * 1000 + CLIENT_DEADLINE_GRACE_MS);
     });
     try {
-      return await Promise.race([promise, deadline]);
+      return await Promise.race([fn(controller.signal), hardReset]);
+    } catch (err) {
+      if (controller.signal.aborted && (err instanceof QueryCancelledError || err === timeoutError)) {
+        throw timeoutError;
+      }
+      throw err;
     } finally {
-      if (timer) clearTimeout(timer);
+      if (abortTimer) clearTimeout(abortTimer);
+      if (resetTimer) clearTimeout(resetTimer);
     }
   }
 
   /** Convenience: execute a query returning an Arrow table. */
   query(sql: string, params?: SqlParameters, options?: RunOptions): Promise<Table> {
-    return this.run((c) => c.execute(sql, params), options);
+    return this.run((c, signal) => c.execute(sql, params, { signal }), options);
+  }
+
+  /**
+   * Executes a query and reads at most `maxRows + 1` rows from the result
+   * stream, then releases the stream so no further batches are transferred.
+   */
+  queryCapped(
+    sql: string,
+    params: SqlParameters | undefined,
+    maxRows: number,
+    options?: RunOptions,
+  ): Promise<CappedResult> {
+    return this.run(async (c, signal) => {
+      const stream = await c.executeStream(sql, params, { signal });
+      const batches: RecordBatch[] = [];
+      let rows = 0;
+      for await (const batch of stream) {
+        batches.push(batch);
+        rows += batch.numRows;
+        if (rows > maxRows) break; // releases the stream
+      }
+      const table = new Table(stream.schema, batches);
+      return { table: rows > maxRows ? table.slice(0, maxRows) : table, truncated: rows > maxRows };
+    }, options);
   }
 
   /** Convenience: execute a statement returning the affected-row count. */
   update(sql: string, params?: SqlParameters, options?: RunOptions): Promise<number> {
-    return this.run((c) => c.executeUpdate(sql, params), options);
+    return this.run((c, signal) => c.executeUpdate(sql, params, { signal }), options);
   }
 }

@@ -50,7 +50,7 @@
     "prepublishOnly": "npm run typecheck && npm run lint:ci && npm test"
   },
   "dependencies": {
-    "@gizmodata/gizmosql-client": "^2.1.0",
+    "@gizmodata/gizmosql-client": "^2.2.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "apache-arrow": "^21.0.0",
     "zod": "^4.0.0"
@@ -64,6 +64,6 @@
     "typescript-eslint": "^8.0.0"
   },
   "allowScripts": {
-    "@gizmodata/gizmosql-client@2.1.0": true
+    "@gizmodata/gizmosql-client@2.2.0": true
   }
 }

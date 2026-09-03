@@ -346,9 +346,9 @@ export function createServer(ctx: ServerContext): McpServer {
         ? wrapWithLimit(guarded.sql, maxRows + 1)
         : guarded.sql;
       const started = Date.now();
-      let table;
+      let capped;
       try {
-        table = await connection.query(effectiveSql, bound);
+        capped = await connection.queryCapped(effectiveSql, bound, maxRows);
       } catch (err) {
         if (guarded.classification.wrappable && !(err instanceof QueryTimeoutError)) {
           throw new Error(
@@ -360,10 +360,11 @@ export function createServer(ctx: ServerContext): McpServer {
         throw err;
       }
       const elapsedMs = Date.now() - started;
-      const formatted = formatTable(table, { maxRows, maxCellChars: config.maxCellChars });
+      const formatted = formatTable(capped.table, { maxRows, maxCellChars: config.maxCellChars });
+      const truncated = formatted.truncated || capped.truncated;
       const footer = resultFooter({
         rowCount: formatted.rowCount,
-        truncated: formatted.truncated,
+        truncated,
         maxRows,
         elapsedMs,
       });
@@ -372,7 +373,7 @@ export function createServer(ctx: ServerContext): McpServer {
         columns: formatted.columns,
         rows: formatted.rows,
         row_count: formatted.rowCount,
-        truncated: formatted.truncated,
+        truncated,
         elapsed_ms: elapsedMs,
       });
     }),

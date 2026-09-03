@@ -178,12 +178,12 @@ Other guarantees:
 - Credentials never appear in tool output, `server_info` or error messages; every message
   that reaches the client is redacted.
 - The row cap is enforced by the server: reads are executed as
-  `SELECT * FROM (<your query>) LIMIT max_rows + 1`, never by fetching everything and
-  slicing (statements that cannot be wrapped, such as `PRAGMA`, are sliced).
+  `SELECT * FROM (<your query>) LIMIT max_rows + 1`, and the result is streamed in
+  batches that stop at the cap, never fetched whole and sliced.
 - The timeout is enforced by the server too, via `SET gizmosql.query_timeout` on the
-  session, with a client-side deadline a few seconds later as a backstop. When the
-  backstop fires the connection is closed, which cancels the statement, and reopened on
-  the next call.
+  session, with a client-side deadline a few seconds later as a backstop that cancels the
+  statement (GizmoSQL 1.38.0 or newer interrupts it server-side). DML/DDL run through
+  `execute_statement` rely on the server-side timeout alone.
 - One connection per process, opened lazily and reconnected once after a connection-level
   failure. The server has no tools that touch the local filesystem or any network endpoint
   other than the configured GizmoSQL host (and, for `login_sso`, its OAuth endpoint).

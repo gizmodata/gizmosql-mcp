@@ -28,26 +28,33 @@ known limitations and follow-ups. Verified against `@gizmodata/gizmosql-client`
   same driver install fine, but do a manual install on a clean Mac before
   the first public release.
 
-## Client (`@gizmodata/gizmosql-client`) gaps
+## Client (`@gizmodata/gizmosql-client`) — resolved in 2.2.0
 
-- **No streaming execute.** `execute()` returns a fully materialized Arrow
-  `Table`, so "stop reading batches at max_rows" cannot be implemented from
-  the public API. The row cap is enforced by wrapping reads in
-  `SELECT * FROM (...) LIMIT n+1` (server-side) and slicing only for
-  statements that cannot be wrapped (`PRAGMA`, `EXPLAIN`). Proposed client
-  addition: `executeStream(sql, params): AsyncIterable<RecordBatch>` over
-  `conn.queryStream()` with `reader.cancel()` (the ADBC reader already
-  exposes it; the client uses it internally in `getQuerySchema`).
-- **No cancellation API.** The only way to abort an in-flight statement is
-  `close()` on the client, which the Go driver relays as a Flight SQL
-  cancel. `GizmoConnection.run()` does exactly that when the client-side
-  deadline fires, then reopens lazily.
-- **No pass-through of ADBC options.** The Go driver supports
-  `adbc.gizmosql.auth_type=external` (OAuth in the driver),
-  `adbc.gizmosql.oauth.*`, and Flight SQL RPC timeouts, but
-  `FlightClientConfig` cannot pass them. A generic `databaseOptions`
-  override in the client would let this server drop its own SSO flow and
-  set RPC timeouts.
+Building this server surfaced three client gaps; all were fixed in
+`@gizmodata/gizmosql-client` 2.2.0 (with gizmosql-adbc 2.0.12), which
+this server now requires:
+
+- **Streaming execute.** `executeStream(sql, params, { signal })` returns
+  an async iterable of record batches. `GizmoConnection.queryCapped()`
+  reads at most `max_rows + 1` rows and then releases the stream, on top of
+  the `SELECT * FROM (...) LIMIT n+1` wrap. Unwrappable statements
+  (`PRAGMA`, `EXPLAIN`) are therefore capped at the batch level too.
+- **Cancellation.** `execute()` / `executeStream()` take an `AbortSignal`.
+  The client-side deadline (server timeout + 5 s) aborts the statement:
+  the driver relays it as a Flight SQL cancel and GizmoSQL >= 1.38.0
+  interrupts it, so the connection is kept. Only if that does not settle
+  the call within 15 s more is the connection dropped and reopened.
+  Caveat: DML/DDL through `execute_statement` cannot be aborted mid-flight
+  from Node.js — `@apache-arrow/adbc-driver-manager` 0.24 releases the
+  native statement only after the blocking update returns (the Go driver
+  itself cancels in-flight updates since 2.0.12). The server-side
+  `gizmosql.query_timeout` covers those.
+- **ADBC option pass-through.** `adbcOptions` in the client config; not
+  used by this server yet (a future option could switch SSO to the
+  driver's `adbc.gizmosql.auth_type=external`).
+- Note: `client.close()` does **not** cancel a running statement through
+  the Node.js driver manager (release is deferred until the statement
+  finishes); an earlier version of these notes assumed it did.
 - `getPrimaryKeys()` (ADBC `GetObjects` depth All) returned no rows for a
   table with a `PRIMARY KEY` on GizmoSQL v1.38.1; `describe_table` uses
   `duckdb_constraints()` instead.

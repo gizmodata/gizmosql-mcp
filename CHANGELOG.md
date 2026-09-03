@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-03
+
 ### Added
 - Initial MCP server for GizmoSQL built on `@gizmodata/gizmosql-client` 2.x
   (native GizmoSQL ADBC driver) and `@modelcontextprotocol/sdk`.
@@ -21,8 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Read-only guard (`sql-guard.ts`) that rejects non-read statements,
   including CTEs ending in DML, `COPY`, `ATTACH`, `INSTALL`, `SET`, etc.
 - Row cap enforced server-side by wrapping reads in
-  `SELECT * FROM (...) LIMIT n+1`; query timeout enforced server-side via
-  `SET gizmosql.query_timeout` with a client-side deadline as backstop.
+  `SELECT * FROM (...) LIMIT n+1` and by streaming batches that stop at the
+  cap (`executeStream`); query timeout enforced server-side via
+  `SET gizmosql.query_timeout` with a client-side `AbortSignal` deadline as
+  backstop (requires `@gizmodata/gizmosql-client` 2.2.0).
 - Transports: stdio (default) and stateless Streamable HTTP (`--transport http`,
   `/mcp`) with optional `GIZMOSQL_MCP_BEARER_TOKEN` authentication.
 - Claude Desktop extension packaging (`manifest.json`, `scripts/build-mcpb.sh`)
