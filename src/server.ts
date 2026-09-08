@@ -64,7 +64,13 @@ function text(body: string, structured?: Record<string, unknown>): CallToolResul
 }
 
 function errorResult(message: string): CallToolResult {
-  return { isError: true, content: [{ type: "text", text: `Error: ${message}` }], _meta: RESULT_META };
+  // No structuredContent here: clients validate it against run_query's
+  // output schema even for errors. The version rides in the text instead.
+  return {
+    isError: true,
+    content: [{ type: "text", text: `Error: ${message}\n\n(${PACKAGE_NAME} ${PACKAGE_VERSION})` }],
+    _meta: RESULT_META,
+  };
 }
 
 /** Converts a thrown error into a redacted, user-facing message. */
@@ -552,7 +558,8 @@ export function createServer(ctx: ServerContext): McpServer {
     {
       title: "Explain query",
       description:
-        "Returns DuckDB's EXPLAIN output (the physical plan) for a SQL statement without executing it.",
+        "Returns DuckDB's EXPLAIN output for a SQL statement without executing it: the physical plan " +
+        "as Markdown plus structured JSON (physical_plan, sections).",
       inputSchema: jsonSchema2020({ sql: sqlArg, connection: connectionArg }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
@@ -562,7 +569,7 @@ export function createServer(ctx: ServerContext): McpServer {
       const normalized = normalizeStatement(guarded.sql);
       const explainSql = /^\s*EXPLAIN\b/iu.test(normalized) ? normalized : `EXPLAIN ${normalized}`;
       const table = await connection.query(explainSql);
-      const sections: string[] = [];
+      const sections: Array<{ key: string; plan: string }> = [];
       const keyCol = table.schema.fields.findIndex((f) => f.name === "explain_key");
       const valCol = table.schema.fields.findIndex((f) => f.name === "explain_value");
       for (let i = 0; i < table.numRows; i++) {
@@ -570,9 +577,16 @@ export function createServer(ctx: ServerContext): McpServer {
         const value = valCol >= 0
           ? String(table.getChildAt(valCol)?.get(i) ?? "")
           : table.schema.fields.map((_, c) => String(table.getChildAt(c)?.get(i))).join(" ");
-        sections.push(`### ${key}\n\`\`\`\n${value.replace(/\s+$/u, "")}\n\`\`\``);
+        sections.push({ key, plan: value.replace(/\s+$/u, "") });
       }
-      return text(sections.join("\n\n") || "(no plan returned)");
+      const body = sections.map((s) => `### ${s.key}\n\`\`\`\n${s.plan}\n\`\`\``).join("\n\n");
+      // DuckDB returns one physical_plan row; other EXPLAIN variants may add more sections.
+      const physical = sections.find((s) => s.key === "physical_plan") ?? sections[0];
+      return text(body || "(no plan returned)", {
+        connection: connection.config.name,
+        physical_plan: physical?.plan ?? null,
+        sections,
+      });
     }),
   );
 

@@ -287,6 +287,9 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
     assert.equal(r.isError, undefined, textOf(r));
     assert.match(textOf(r), /physical_plan/);
     assert.match(textOf(r), /SEQ_SCAN|UNGROUPED_AGGREGATE/);
+    const plan = r.structuredContent as { physical_plan: string | null; sections: Array<{ key: string; plan: string }> };
+    assert.match(plan.physical_plan ?? "", /SEQ_SCAN|UNGROUPED_AGGREGATE/);
+    assert.ok(plan.sections.some((s) => s.key === "physical_plan"));
   });
 
   it("times out runaway queries and recovers", async () => {

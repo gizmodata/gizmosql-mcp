@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-08
+
+### Fixed
+- `explain_query` appeared to return only the version envelope in 0.3.6:
+  it was the one tool without structured content, and hosts that show
+  structured content in preference to text saw nothing else. It now returns
+  `physical_plan` and `sections` as structured JSON alongside the Markdown.
+
+### Added
+- Error results end with the server name and version, so the build is
+  identifiable exactly when a bug report needs it. (Errors cannot carry
+  structured content: clients validate it against `run_query`'s output
+  schema even for errors.)
+
 ## [0.3.6] - 2026-09-08
 
 ### Added

@@ -13,7 +13,7 @@ import { PACKAGE_NAME, PACKAGE_VERSION } from "../../dist/version.js";
 
 describe("result envelope", () => {
   it("stamps _meta.gizmosql_mcp on success and error results", async () => {
-    const config = parseConfig({ GIZMOSQL_HOST: "db.internal", GIZMOSQL_USERNAME: "u", GIZMOSQL_PASSWORD: "p" });
+    const config = parseConfig({ GIZMOSQL_HOST: "db.internal", GIZMOSQL_USERNAME: "u", GIZMOSQL_PASSWORD: "unit-test-secret" });
     const registry = new ConnectionRegistry(config, () => undefined);
     const server = createServer({ registry, config, transport: "stdio" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -29,6 +29,10 @@ describe("result envelope", () => {
       const failed = await client.callTool({ name: "use_connection", arguments: { name: "nope" } });
       assert.equal(failed.isError, true);
       assert.deepEqual(failed._meta, expected);
+      assert.equal(failed.structuredContent, undefined, "errors carry no structuredContent (clients validate it)");
+      const failedText = (failed.content as Array<{ text: string }>)[0].text;
+      assert.match(failedText, /nope/);
+      assert.ok(failedText.endsWith(`(${PACKAGE_NAME} ${PACKAGE_VERSION})`), failedText);
     } finally {
       await client.close();
       await server.close();
