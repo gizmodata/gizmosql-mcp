@@ -107,6 +107,12 @@ this server now requires:
 - `ResourceTemplate` requires an explicit `list` callback; ours lists up to
   500 tables.
 - Tool names use underscores only (Claude Desktop rejects dots).
+- `npx -y @gizmodata/gizmosql-mcp` fails with `sh: gizmosql-mcp: command not
+  found` when the cwd is this repo: npm resolves the spec to the local
+  project (same name) and there is no bin link in its `node_modules/.bin`.
+  Claude Code launches stdio servers with the project as cwd, so an MCP
+  entry using npx shows "Connection closed" only from inside this checkout.
+  Use `node /path/to/gizmosql-mcp/dist/cli.js` for a local-testing entry.
 - The `.mcpb` bundles all five `@apache-arrow/adbc-driver-manager-*` napi
   packages (fetched with `npm pack`) plus five drivers, so it is ~150 MB
   unpacked / ~80 MB zipped. `mcpb clean` could trim `node_modules` further.

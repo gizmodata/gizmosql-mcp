@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-08
+
+### Fixed
+- `describe_table` failed outright in 0.3.4 when the one-row estimate probe
+  was refused (GizmoSQL's system-managed instrumentation catalog is
+  admin-only). A refused probe now leaves `estimated_rows` as `null`.
+
+### Added
+- The schema-dialect unit test now compiles every advertised tool schema
+  with a 2020-12-only Ajv validator, the same check that rejected
+  `run_query` in Claude Desktop, with a draft-07 control that must fail.
+
 ## [0.3.4] - 2026-09-08
 
 ### Changed

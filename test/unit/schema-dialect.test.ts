@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
@@ -44,5 +45,24 @@ describe("tool schema dialect", () => {
     }
     const runQuery = tools.find((t) => t.name === "run_query");
     assert.ok(runQuery?.outputSchema, "run_query declares an outputSchema");
+  });
+
+  it("compiles every schema with a 2020-12-only validator (what Claude Desktop uses)", async () => {
+    // Ajv2020 with the MCP client SDK's options only knows the 2020-12
+    // metaschema, so a schema declaring another dialect fails to compile.
+    // That is how the Windows Claude Desktop failure surfaced.
+    const ajv = () => new Ajv2020({ strict: false });
+    assert.throws(
+      () => ajv().compile({ $schema: "http://json-schema.org/draft-07/schema#", type: "object" }),
+      /no schema with key or ref/,
+      "control: the validator must reject a draft-07 schema",
+    );
+    const tools = await listTools({ GIZMOSQL_ALLOW_WRITES: "true", GIZMOSQL_ENABLE_SSO: "true" });
+    for (const tool of tools) {
+      assert.doesNotThrow(() => ajv().compile(tool.inputSchema), `${tool.name} inputSchema`);
+      if (tool.outputSchema) {
+        assert.doesNotThrow(() => ajv().compile(tool.outputSchema as object), `${tool.name} outputSchema`);
+      }
+    }
   });
 });

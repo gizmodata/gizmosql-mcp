@@ -396,10 +396,17 @@ export function createServer(ctx: ServerContext): McpServer {
         // DuckDB reports 0 for tables it has no statistics for (attached
         // Postgres/SQLite catalogs, freshly attached files). A one-row probe
         // is cheap and turns a misleading 0 into "unknown" when data exists.
-        const probe = await connection.query(
-          `SELECT 1 FROM ${quoteIdent(ref.catalog)}.${quoteIdent(ref.schema)}.${quoteIdent(ref.table)} LIMIT 1`,
-        );
-        if (probe.numRows > 0) estimatedRows = null;
+        // The probe can be refused (e.g. GizmoSQL's system-managed
+        // instrumentation catalog is admin-only); metadata is still useful
+        // then, so a failed probe just leaves the estimate unknown.
+        try {
+          const probe = await connection.query(
+            `SELECT 1 FROM ${quoteIdent(ref.catalog)}.${quoteIdent(ref.schema)}.${quoteIdent(ref.table)} LIMIT 1`,
+          );
+          if (probe.numRows > 0) estimatedRows = null;
+        } catch {
+          estimatedRows = null;
+        }
       }
 
       const constraints = await connection.query(
