@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-08
+
+### Added
+- Every successful tool result now includes `mcp_server_version` in its
+  structured content (and `run_query`'s output schema). Claude Desktop shows
+  structured content to the model but not `_meta`, so the version added in
+  0.3.4 was invisible there.
+
 ## [0.3.5] - 2026-09-08
 
 ### Fixed

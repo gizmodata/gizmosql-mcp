@@ -25,6 +25,7 @@ describe("result envelope", () => {
       const ok = await client.callTool({ name: "list_connections", arguments: {} });
       assert.equal(ok.isError, undefined);
       assert.deepEqual(ok._meta, expected);
+      assert.equal((ok.structuredContent as { mcp_server_version: string }).mcp_server_version, PACKAGE_VERSION);
       const failed = await client.callTool({ name: "use_connection", arguments: { name: "nope" } });
       assert.equal(failed.isError, true);
       assert.deepEqual(failed._meta, expected);

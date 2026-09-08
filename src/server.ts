@@ -54,9 +54,13 @@ function instructions(registry: ConnectionRegistry): string {
 const RESULT_META = { gizmosql_mcp: { name: PACKAGE_NAME, version: PACKAGE_VERSION } };
 
 function text(body: string, structured?: Record<string, unknown>): CallToolResult {
-  const result: CallToolResult = { content: [{ type: "text", text: body }], _meta: RESULT_META };
-  if (structured) result.structuredContent = structured;
-  return result;
+  // Hosts such as Claude Desktop show structuredContent to the model but not
+  // _meta, so the version travels in both.
+  return {
+    content: [{ type: "text", text: body }],
+    structuredContent: { ...structured, mcp_server_version: PACKAGE_VERSION },
+    _meta: RESULT_META,
+  };
 }
 
 function errorResult(message: string): CallToolResult {
@@ -496,6 +500,7 @@ export function createServer(ctx: ServerContext): McpServer {
         truncated: z.boolean(),
         elapsed_ms: z.number(),
         connection: z.string(),
+        mcp_server_version: z.string(),
       }),
       annotations: { readOnlyHint: !config.allowWrites, idempotentHint: !config.allowWrites },
     },

@@ -374,7 +374,9 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
       await call(rw, "execute_statement", { sql: "CREATE SCHEMA IF NOT EXISTS mcp_alt" });
       const used = await call(withDefault, "use_schema", { catalog: "memory", schema: "mcp_alt" });
       assert.equal(used.isError, undefined, textOf(used));
-      assert.deepEqual(used.structuredContent, { catalog: "memory", schema: "mcp_alt" });
+      const usedStructured = used.structuredContent as { catalog: string; schema: string };
+      assert.equal(usedStructured.catalog, "memory");
+      assert.equal(usedStructured.schema, "mcp_alt");
       const viaSql = await call(withDefault, "run_query", { sql: "USE memory.main" });
       assert.equal(viaSql.isError, undefined, textOf(viaSql));
       const after = await call(withDefault, "run_query", { sql: "SELECT current_catalog() AS c, current_schema() AS s" });
