@@ -77,6 +77,18 @@ export function describeError(err: unknown, redact: (text: string) => string): s
   return redact(cleaned);
 }
 
+/**
+ * Wraps a raw Zod shape so the SDK advertises it as JSON Schema 2020-12.
+ * The MCP SDK converts Zod v4 schemas with a draft-07 target and stamps
+ * `$schema: draft-07` on every tool schema (typescript-sdk #2721); strict
+ * hosts such as Claude Desktop reject such tools before calling them.
+ * Zod merges `.meta()` into the generated schema, overriding the stamp.
+ */
+const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+function jsonSchema2020<T extends z.ZodRawShape>(shape: T) {
+  return z.object(shape).meta({ $schema: JSON_SCHEMA_2020_12 });
+}
+
 const sqlArg = z.string().min(1).describe("A single SQL statement (DuckDB dialect).");
 const connectionArg = z
   .string()
@@ -158,7 +170,7 @@ export function createServer(ctx: ServerContext): McpServer {
       description:
         "Lists the configured GizmoSQL connections (name, host, auth method, default catalog/schema) and " +
         "which one is current. Credentials are never returned.",
-      inputSchema: {},
+      inputSchema: jsonSchema2020({}),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async () => {
@@ -187,7 +199,7 @@ export function createServer(ctx: ServerContext): McpServer {
       description:
         "Makes the named connection the default for subsequent tool calls (see list_connections). " +
         "Tools also accept a per-call connection argument.",
-      inputSchema: { name: z.string().min(1).describe("Connection name.") },
+      inputSchema: jsonSchema2020({ name: z.string().min(1).describe("Connection name.") }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ name }) => {
@@ -206,7 +218,7 @@ export function createServer(ctx: ServerContext): McpServer {
     {
       title: "List catalogs",
       description: "Lists the catalogs (attached databases) visible to the connected GizmoSQL user.",
-      inputSchema: { connection: connectionArg },
+      inputSchema: jsonSchema2020({ connection: connectionArg }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ connection }) => {
@@ -223,10 +235,10 @@ export function createServer(ctx: ServerContext): McpServer {
     {
       title: "List schemas",
       description: "Lists schemas, optionally filtered to one catalog.",
-      inputSchema: {
+      inputSchema: jsonSchema2020({
         catalog: z.string().optional().describe("Catalog name to filter by (exact match)."),
         connection: connectionArg,
-      },
+      }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ catalog, connection }) => {
@@ -244,12 +256,12 @@ export function createServer(ctx: ServerContext): McpServer {
       description:
         "Lists tables and views with their type. Filters are optional; `like` is a SQL LIKE pattern " +
         "on the table name (e.g. 'orders%').",
-      inputSchema: {
+      inputSchema: jsonSchema2020({
         catalog: z.string().optional().describe("Catalog name (exact match)."),
         schema: z.string().optional().describe("Schema name (SQL LIKE pattern, e.g. 'main')."),
         like: z.string().optional().describe("Table-name LIKE pattern, e.g. 'cust%'."),
         connection: connectionArg,
-      },
+      }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ catalog, schema, like, connection }) => {
@@ -275,12 +287,12 @@ export function createServer(ctx: ServerContext): McpServer {
         "Describes a table or view: columns with types and nullability, constraints, and an " +
         "estimated row count when it is cheap to obtain. Provide schema/catalog when the table " +
         "name is ambiguous.",
-      inputSchema: {
+      inputSchema: jsonSchema2020({
         table: z.string().min(1).describe("Table or view name (exact match)."),
         schema: z.string().optional().describe("Schema name (exact match)."),
         catalog: z.string().optional().describe("Catalog name (exact match)."),
         connection: connectionArg,
-      },
+      }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ table, schema, catalog, connection: connectionName }) => {
@@ -394,11 +406,11 @@ export function createServer(ctx: ServerContext): McpServer {
       description:
         "Sets the session's default catalog and/or schema (DuckDB USE) so unqualified table names " +
         "resolve there for the rest of the session. Does not read or modify data.",
-      inputSchema: {
+      inputSchema: jsonSchema2020({
         catalog: z.string().optional().describe("Catalog (database) name."),
         schema: z.string().optional().describe("Schema name within the catalog."),
         connection: connectionArg,
-      },
+      }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ catalog, schema, connection: connectionName }) => {
@@ -422,7 +434,7 @@ export function createServer(ctx: ServerContext): McpServer {
         (config.allowWrites
           ? "Writes are enabled on this server; prefer execute_statement for DML/DDL."
           : "This server is read-only: only SELECT/WITH/SHOW/DESCRIBE/SUMMARIZE/EXPLAIN/PRAGMA(read)/USE statements are accepted."),
-      inputSchema: {
+      inputSchema: jsonSchema2020({
         sql: sqlArg,
         params: paramsSchema.optional().describe(PARAMS_DESCRIPTION),
         max_rows: z
@@ -432,15 +444,15 @@ export function createServer(ctx: ServerContext): McpServer {
           .optional()
           .describe(`Row cap for this call (1..${config.maxRows}; default ${config.maxRows}).`),
         connection: connectionArg,
-      },
-      outputSchema: {
+      }),
+      outputSchema: jsonSchema2020({
         columns: z.array(z.object({ name: z.string(), type: z.string() })),
         rows: z.array(z.array(z.unknown())),
         row_count: z.number(),
         truncated: z.boolean(),
         elapsed_ms: z.number(),
         connection: z.string(),
-      },
+      }),
       annotations: { readOnlyHint: !config.allowWrites, idempotentHint: !config.allowWrites },
     },
     tool(async ({ sql, params, max_rows, connection: connectionName }) => {
@@ -492,7 +504,7 @@ export function createServer(ctx: ServerContext): McpServer {
       title: "Explain query",
       description:
         "Returns DuckDB's EXPLAIN output (the physical plan) for a SQL statement without executing it.",
-      inputSchema: { sql: sqlArg, connection: connectionArg },
+      inputSchema: jsonSchema2020({ sql: sqlArg, connection: connectionArg }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ sql, connection: connectionName }) => {
@@ -523,11 +535,11 @@ export function createServer(ctx: ServerContext): McpServer {
         description:
           "Executes a DML/DDL statement (INSERT/UPDATE/DELETE/CREATE/...) with optional bound parameters " +
           "and returns the affected-row count (-1 when the server does not report one).",
-        inputSchema: {
+        inputSchema: jsonSchema2020({
           sql: sqlArg,
           params: paramsSchema.optional().describe(PARAMS_DESCRIPTION),
           connection: connectionArg,
-        },
+        }),
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
       },
       tool(async ({ sql, params, connection: connectionName }) => {
@@ -554,7 +566,7 @@ export function createServer(ctx: ServerContext): McpServer {
       description:
         "Reports the GizmoSQL and DuckDB versions of a connection, its connection URI (credentials " +
         "redacted), the effective limits, every configured connection, and this MCP server's version.",
-      inputSchema: { connection: connectionArg },
+      inputSchema: jsonSchema2020({ connection: connectionArg }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ connection: connectionName }) => {
@@ -630,7 +642,7 @@ export function createServer(ctx: ServerContext): McpServer {
           "Signs in to GizmoSQL with the server's OAuth/SSO identity provider: opens the provider's " +
           "login page in your browser, waits for you to finish, then reconnects with the identity " +
           "token (kept in memory only). If the wait times out, call login_sso again to keep waiting.",
-        inputSchema: {
+        inputSchema: jsonSchema2020({
           wait_seconds: z
             .number()
             .int()
@@ -639,7 +651,7 @@ export function createServer(ctx: ServerContext): McpServer {
             .optional()
             .describe("How long to wait for the browser login before returning (default 90)."),
           connection: connectionArg,
-        },
+        }),
         annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
       },
       tool(async ({ wait_seconds, connection: connectionName }) => {

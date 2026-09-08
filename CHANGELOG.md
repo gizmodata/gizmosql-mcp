@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-08
+
+### Fixed
+- Tool schemas are now advertised as JSON Schema 2020-12. The MCP SDK stamps
+  `"$schema": draft-07` on every Zod-derived schema (typescript-sdk #2721),
+  and newer Claude Desktop builds reject `run_query` before calling it with
+  "invalid outputSchema: JSON Schema declares an unsupported dialect".
+
 ## [0.3.2] - 2026-09-03
 
 ### Changed

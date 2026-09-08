@@ -89,6 +89,13 @@ this server now requires:
 
 - `McpServer.registerTool` accepts zod v4 raw shapes; `outputSchema` makes
   the SDK validate `structuredContent` (used by `run_query`).
+- The SDK converts zod v4 schemas with a draft-07 target and never passes a
+  `target` (typescript-sdk #2721 / #2677 / #2084), so every tool schema gets
+  `"$schema": draft-07`, which strict hosts (Claude Desktop ≥ 1.37937) reject
+  for `outputSchema`. `jsonSchema2020()` in `server.ts` wraps each shape in
+  `z.object(...).meta({ $schema: 2020-12 })`; zod merges `.meta()` into the
+  generated JSON Schema, overriding the stamp. Drop it once the SDK defaults
+  to 2020-12. `test/unit/schema-dialect.test.ts` guards this.
 - `StreamableHTTPServerTransport.handleRequest(req, res)` works with
   Node's `http` module directly; no Express needed. Stateless mode = a new
   `McpServer` + transport per request sharing one `GizmoConnection`.
