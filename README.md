@@ -21,7 +21,7 @@ Windows x64.
 | `list_connections()` | Configured GizmoSQL connections and which one is current (never credentials) |
 | `use_connection(name)` | Makes a connection the default for subsequent calls |
 | `list_catalogs` | Catalogs (attached databases) visible to the user |
-| `list_schemas(catalog?)` | Schemas, optionally in one catalog |
+| `list_schemas(catalog?, include_system?)` | Schemas, optionally in one catalog; system schemas (`information_schema`, `pg_catalog`, `pg_toast`, `pg_temp_*`) are hidden unless `include_system` is true |
 | `list_tables(catalog?, schema?, like?)` | Tables and views with their type; `like` is a SQL LIKE pattern |
 | `describe_table(table, schema?, catalog?)` | Columns, types, nullability, constraints, estimated row count |
 | `use_schema(catalog?, schema?)` | Sets the session's default catalog/schema (DuckDB `USE`) for unqualified table names |

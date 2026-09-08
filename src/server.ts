@@ -50,14 +50,17 @@ function instructions(registry: ConnectionRegistry): string {
   );
 }
 
+/** Result envelope metadata so a client can tell which build answered without calling server_info. */
+const RESULT_META = { gizmosql_mcp: { name: PACKAGE_NAME, version: PACKAGE_VERSION } };
+
 function text(body: string, structured?: Record<string, unknown>): CallToolResult {
-  const result: CallToolResult = { content: [{ type: "text", text: body }] };
+  const result: CallToolResult = { content: [{ type: "text", text: body }], _meta: RESULT_META };
   if (structured) result.structuredContent = structured;
   return result;
 }
 
 function errorResult(message: string): CallToolResult {
-  return { isError: true, content: [{ type: "text", text: `Error: ${message}` }] };
+  return { isError: true, content: [{ type: "text", text: `Error: ${message}` }], _meta: RESULT_META };
 }
 
 /** Converts a thrown error into a redacted, user-facing message. */
@@ -87,6 +90,22 @@ export function describeError(err: unknown, redact: (text: string) => string): s
 const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
 function jsonSchema2020<T extends z.ZodRawShape>(shape: T) {
   return z.object(shape).meta({ $schema: JSON_SCHEMA_2020_12 });
+}
+
+/**
+ * Schemas DuckDB and the Postgres-compatibility layer create in every
+ * catalog. Attached Postgres databases also expose one `pg_temp_N` /
+ * `pg_toast_temp_N` pair per backend, which can run into the hundreds.
+ */
+export function isSystemSchema(name: string): boolean {
+  const lower = name.toLowerCase();
+  return (
+    lower === "information_schema" ||
+    lower === "pg_catalog" ||
+    lower === "pg_toast" ||
+    lower.startsWith("pg_temp_") ||
+    lower.startsWith("pg_toast_temp_")
+  );
 }
 
 const sqlArg = z.string().min(1).describe("A single SQL statement (DuckDB dialect).");
@@ -234,18 +253,27 @@ export function createServer(ctx: ServerContext): McpServer {
     "list_schemas",
     {
       title: "List schemas",
-      description: "Lists schemas, optionally filtered to one catalog.",
+      description:
+        "Lists schemas, optionally filtered to one catalog. System schemas (information_schema, " +
+        "pg_catalog, pg_toast, pg_temp_*, pg_toast_temp_*) are hidden unless include_system is true.",
       inputSchema: jsonSchema2020({
         catalog: z.string().optional().describe("Catalog name to filter by (exact match)."),
+        include_system: z
+          .boolean()
+          .optional()
+          .describe("Also list system schemas (information_schema, pg_catalog, pg_toast, pg_temp_*). Default false."),
         connection: connectionArg,
       }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
-    tool(async ({ catalog, connection }) => {
-      const schemas = await conn(connection).run((c) => c.getSchemas(catalog));
+    tool(async ({ catalog, include_system, connection }) => {
+      const all = await conn(connection).run((c) => c.getSchemas(catalog));
+      const schemas = include_system ? all : all.filter((s) => !isSystemSchema(s.schema));
+      const hidden = all.length - schemas.length;
       const rows = schemas.map((s) => [escapeMarkdownCell(s.catalog), escapeMarkdownCell(s.schema)]);
-      const body = rows.length ? toMarkdownTable(["catalog", "schema"], rows) : "(no schemas found)";
-      return text(body, { schemas });
+      let body = rows.length ? toMarkdownTable(["catalog", "schema"], rows) : "(no schemas found)";
+      if (hidden > 0) body += `\n\n(${hidden} system schema${hidden === 1 ? "" : "s"} hidden; pass include_system: true to list them.)`;
+      return text(body, { schemas, hidden_system_schemas: hidden });
     }),
   );
 
@@ -363,6 +391,15 @@ export function createServer(ctx: ServerContext): McpServer {
         kind = String(meta.getChildAt(0)?.get(0));
         const est = meta.getChildAt(1)?.get(0);
         if (est !== null && est !== undefined) estimatedRows = Number(est);
+      }
+      if (estimatedRows === 0) {
+        // DuckDB reports 0 for tables it has no statistics for (attached
+        // Postgres/SQLite catalogs, freshly attached files). A one-row probe
+        // is cheap and turns a misleading 0 into "unknown" when data exists.
+        const probe = await connection.query(
+          `SELECT 1 FROM ${quoteIdent(ref.catalog)}.${quoteIdent(ref.schema)}.${quoteIdent(ref.table)} LIMIT 1`,
+        );
+        if (probe.numRows > 0) estimatedRows = null;
       }
 
       const constraints = await connection.query(

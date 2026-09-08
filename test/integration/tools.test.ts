@@ -203,6 +203,14 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
     assert.ok((catalogs.structuredContent as { catalogs: string[] }).catalogs.includes("memory"));
     const schemas = await call(ro, "list_schemas", { catalog: "memory" });
     assert.match(textOf(schemas), /\| memory \| main \|/);
+    type SchemaList = { schemas: Array<{ catalog: string; schema: string }>; hidden_system_schemas: number };
+    const filtered = (await call(ro, "list_schemas")).structuredContent as SchemaList;
+    const withSystem = (await call(ro, "list_schemas", { include_system: true })).structuredContent as SchemaList;
+    assert.ok(filtered.schemas.every((s) => !/^(pg_|information_schema)/.test(s.schema)), JSON.stringify(filtered));
+    assert.ok(withSystem.schemas.some((s) => s.schema === "information_schema"), JSON.stringify(withSystem));
+    assert.equal(withSystem.hidden_system_schemas, 0);
+    assert.equal(filtered.hidden_system_schemas, withSystem.schemas.length - filtered.schemas.length);
+    assert.ok(filtered.hidden_system_schemas >= 1);
     const tables = await call(ro, "list_tables", { catalog: "memory", like: "mcp%" });
     assert.match(textOf(tables), /\| memory \| main \| mcp_it \| BASE TABLE \|/);
     const described = await call(ro, "describe_table", { table: "mcp_it" });
@@ -210,6 +218,11 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
     const text = textOf(described);
     assert.match(text, /\*\*memory\.main\.mcp_it\*\* \(BASE TABLE\)/);
     assert.match(text, /\| amount \| DECIMAL\(10,2\) \| YES \|/);
+    const est = (described.structuredContent as { estimated_rows: number | null }).estimated_rows;
+    assert.notEqual(est, 0, "a populated table must not report 0 estimated rows");
+    const meta = (described as { _meta?: { gizmosql_mcp?: { name: string; version: string } } })._meta;
+    assert.equal(meta?.gizmosql_mcp?.name, "@gizmodata/gizmosql-mcp");
+    assert.match(meta?.gizmosql_mcp?.version ?? "", /^\d+\.\d+\.\d+/);
     assert.match(text, /\| name \| VARCHAR \| NO \|/);
     assert.match(text, /PRIMARY KEY/);
     const missing = await call(ro, "describe_table", { table: "does_not_exist" });

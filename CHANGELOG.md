@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-08
+
+### Changed
+- `list_schemas` hides system schemas (`information_schema`, `pg_catalog`,
+  `pg_toast`, `pg_temp_*`, `pg_toast_temp_*`) by default and reports how
+  many were hidden. Attached Postgres databases expose hundreds of
+  `pg_temp_N` schemas, which made the unfiltered call unusable. Pass
+  `include_system: true` to list them.
+
+### Added
+- Every tool result carries `_meta.gizmosql_mcp` with the server name and
+  version, so a client can tell which build answered without calling
+  `server_info`.
+
+### Fixed
+- `describe_table` no longer reports `estimated_rows: 0` for populated
+  tables DuckDB has no statistics for (attached Postgres catalogs). A
+  one-row probe turns that into `null` (unknown) when data exists.
+
 ## [0.3.3] - 2026-09-08
 
 ### Fixed

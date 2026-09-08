@@ -78,6 +78,11 @@ this server now requires:
   (`session_warnings`) and rely on the client-side deadline.
 - `GIZMOSQL_VERSION()` / `version()` / `GIZMOSQL_USER()` for `server_info`,
   with Flight SQL `SqlInfo` (server name/version) as fallback.
+- Attached Postgres catalogs (e.g. `instr_gizmosql_instrumentation`) expose
+  one `pg_temp_N`/`pg_toast_temp_N` schema pair per backend (hundreds), so
+  `list_schemas` hides system schemas unless `include_system: true`.
+  `duckdb_tables().estimated_size` is 0 for such tables; `describe_table`
+  probes one row and reports `null` instead when data exists.
 - DuckDB `SHOW`, `DESCRIBE`, `SUMMARIZE`, `FROM`, `VALUES` and `TABLE` can be
   used as subqueries and are wrapped; `PRAGMA`/`EXPLAIN` cannot.
 - Query/session tags (`SET gizmosql.query_tag`, `SET gizmosql.session_tag`)
