@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-09
+
+### Changed
+- Requires `@gizmodata/gizmosql-client` >= 2.2.1, which bundles gizmosql-adbc
+  v2.0.13: parameterized DDL/DML sent through `execute_statement` with bound
+  parameters now executes immediately instead of running lazily on the server,
+  where it could be silently lost or interrupted by the client's own cancel.
+
 ## [0.4.3] - 2026-09-09
 
 ### Added

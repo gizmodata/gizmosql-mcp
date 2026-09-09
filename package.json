@@ -1,6 +1,6 @@
 {
   "name": "@gizmodata/gizmosql-mcp",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Model Context Protocol (MCP) server and Claude Desktop extension for GizmoSQL",
   "author": "GizmoData LLC",
   "license": "Apache-2.0",
@@ -50,7 +50,7 @@
     "prepublishOnly": "npm run typecheck && npm run lint:ci && npm test"
   },
   "dependencies": {
-    "@gizmodata/gizmosql-client": "^2.2.0",
+    "@gizmodata/gizmosql-client": "^2.2.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "apache-arrow": "^21.0.0",
     "jose": "^6.2.12",
@@ -66,6 +66,6 @@
     "typescript-eslint": "^8.0.0"
   },
   "allowScripts": {
-    "@gizmodata/gizmosql-client@2.2.0": true
+    "@gizmodata/gizmosql-client@2.2.1": true
   }
 }
