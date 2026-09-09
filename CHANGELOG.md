@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-09
+
+### Fixed
+- Calling `run_query` or `execute_statement` with fewer (or more) values than
+  the statement has placeholders is now rejected before the query is sent,
+  with a message that states both counts, instead of surfacing DuckDB's
+  "Values were not provided for the following prepared statement parameters"
+  wrapped in Arrow and Flight SQL transport noise.
+- Server errors are shown without the driver's wrappers (`Arrow Error: C Data
+  interface error: [FlightSQL] An execution error has occurred:` and the
+  trailing `(Unknown; DoGet: endpoint 0: [])`), whichever tool raised them.
+- The note about the `LIMIT` wrapper offsetting line numbers is only added to
+  errors that actually cite a line.
+
+### Changed
+- `list_schemas` explains that DuckDB keeps `information_schema` and
+  `pg_catalog` in the `system` catalog only, so `include_system` does not add
+  schemas to a user catalog.
+
 ## [0.4.0] - 2026-09-09
 
 ### Added

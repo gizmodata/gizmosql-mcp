@@ -251,6 +251,35 @@ function tokenize(sql: string): Token[] {
 }
 
 /**
+ * Number of parameters a statement expects: `?` placeholders, or the highest
+ * `$n` index, counted outside strings, quoted identifiers and comments.
+ */
+export function countPlaceholders(sql: string): number {
+  const tokens = tokenize(stripComments(sql));
+  let question = 0;
+  let dollarMax = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.kind !== "punct") continue;
+    if (t.text === "?") {
+      question++;
+      continue;
+    }
+    if (t.text === "$") {
+      // Digits are tokenized one per punct token; take the contiguous run after `$`.
+      let digits = "";
+      let pos = t.start + 1;
+      for (let j = i + 1; j < tokens.length && tokens[j].kind === "punct" && /\d/.test(tokens[j].text) && tokens[j].start === pos; j++) {
+        digits += tokens[j].text;
+        pos++;
+      }
+      if (digits) dollarMax = Math.max(dollarMax, Number(digits));
+    }
+  }
+  return Math.max(question, dollarMax);
+}
+
+/**
  * Splits SQL into top-level statements on semicolons that are outside
  * strings, quoted identifiers and comments. Empty statements (e.g. from a
  * trailing semicolon) are dropped.

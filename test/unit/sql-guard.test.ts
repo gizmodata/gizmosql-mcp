@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  countPlaceholders,
   classifyStatement,
   guardStatement,
   normalizeStatement,
@@ -165,5 +166,20 @@ describe("normalizeStatement / wrapWithLimit", () => {
 
   it("rejects non-positive limits", () => {
     assert.throws(() => wrapWithLimit("SELECT 1", 0), SqlGuardError);
+  });
+});
+
+describe("countPlaceholders", () => {
+  it("counts ? placeholders outside strings, comments and quoted identifiers", () => {
+    assert.equal(countPlaceholders("SELECT 1"), 0);
+    assert.equal(countPlaceholders("SELECT ?::INTEGER AS a, ?::INTEGER AS b"), 2);
+    assert.equal(countPlaceholders("SELECT '?' AS q, \"col?\" FROM t WHERE x = ? -- and ? here\n"), 1);
+    assert.equal(countPlaceholders("SELECT $$?$$, ? /* ? */"), 1);
+  });
+
+  it("uses the highest $n index for numbered placeholders", () => {
+    assert.equal(countPlaceholders("SELECT $1, $2, $1"), 2);
+    assert.equal(countPlaceholders("SELECT * FROM t WHERE a = $12"), 12);
+    assert.equal(countPlaceholders("SELECT '$1' AS s"), 0);
   });
 });

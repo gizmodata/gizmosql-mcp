@@ -198,6 +198,21 @@ describe("gizmosql-mcp integration", { skip: target ? false : "Docker not availa
     assert.equal((bound.structuredContent as { affected_rows: number }).affected_rows, 1);
   });
 
+  it("rejects a placeholder/parameter count mismatch before the query is sent, and strips transport noise", async () => {
+    const short = await call(ro, "run_query", { sql: "SELECT ?::INTEGER AS a, ?::INTEGER AS b", params: [1] });
+    assert.equal(short.isError, true);
+    assert.match(textOf(short), /2 placeholders .* 1 parameter was supplied/);
+    assert.doesNotMatch(textOf(short), /Arrow Error|FlightSQL|DoGet|LIMIT/);
+    const extra = await call(ro, "run_query", { sql: "SELECT 1", params: [1] });
+    assert.equal(extra.isError, true);
+    assert.match(textOf(extra), /0 placeholders .* 1 parameter/);
+    // A genuine server error keeps DuckDB's message but loses the driver wrappers.
+    const bad = await call(ro, "run_query", { sql: "SELECT no_such_column FROM mcp_it" });
+    assert.equal(bad.isError, true);
+    assert.match(textOf(bad), /Binder Error/);
+    assert.doesNotMatch(textOf(bad), /Arrow Error|C Data interface|\[FlightSQL\]|DoGet/);
+  });
+
   it("metadata tools see the table", async () => {
     const catalogs = await call(ro, "list_catalogs");
     assert.ok((catalogs.structuredContent as { catalogs: string[] }).catalogs.includes("memory"));

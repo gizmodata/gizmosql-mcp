@@ -20,6 +20,7 @@ import { convertParams, paramsSchema, PARAMS_DESCRIPTION, ParameterError } from 
 import { ConnectionRegistry, UnknownConnectionError } from "./registry.js";
 import { runSsoLogin } from "./sso.js";
 import {
+  countPlaceholders,
   guardStatement,
   normalizeStatement,
   SqlGuardError,
@@ -92,10 +93,53 @@ export function describeError(err: unknown, redact: (text: string) => string): s
     return redact(err.message);
   }
   const raw = err instanceof Error ? err.message : String(err);
-  // Surface the server's message verbatim (minus credentials); strip the
-  // client's generic prefix so the DuckDB error is front and center.
-  const cleaned = raw.replace(/^Failed to execute (?:query|update): /u, "");
-  return redact(cleaned);
+  return redact(stripTransportNoise(raw));
+}
+
+/**
+ * Peels the client/driver/Flight SQL wrappers off a server error so the
+ * DuckDB message is front and center, e.g.
+ *   "Arrow Error: C Data interface error: [FlightSQL] An execution error has
+ *    occurred: Invalid Input Error: ... (Unknown; DoGet: endpoint 0: [])"
+ * becomes "Invalid Input Error: ...".
+ */
+export function stripTransportNoise(message: string): string {
+  let m = message.trim();
+  const prefixes = [
+    /^Failed to execute (?:query|update): /u,
+    /^Arrow Error: /u,
+    /^C Data interface error: /u,
+    /^\[FlightSQL\] /u,
+    /^An execution error has occurred: /u,
+    /^(?:ADBC|Flight SQL|gRPC) error: /iu,
+  ];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const p of prefixes) {
+      const next = m.replace(p, "");
+      if (next !== m) {
+        m = next;
+        changed = true;
+      }
+    }
+  }
+  // Trailing Flight transport context such as "(Unknown; DoGet: endpoint 0: [])".
+  m = m.replace(/\s*\((?:Unknown|Internal|Invalid argument|Unavailable|Unauthenticated|Permission denied)(?:; [^()]*)?\)\s*$/u, "");
+  return m.trim();
+}
+
+/** Rejects a call whose parameter count does not match the statement's placeholders. */
+function assertParameterCount(sql: string, bound: readonly unknown[] | undefined): void {
+  const expected = countPlaceholders(sql);
+  const supplied = bound?.length ?? 0;
+  if (expected === supplied) return;
+  const ph = (n: number) => `${n} placeholder${n === 1 ? "" : "s"}`;
+  const pv = (n: number) => `${n} parameter${n === 1 ? "" : "s"}`;
+  throw new ParameterError(
+    `The statement has ${ph(expected)} (? or $n) but ${pv(supplied)} ${supplied === 1 ? "was" : "were"} supplied in params. ` +
+      "Pass exactly one value per placeholder, in order.",
+  );
 }
 
 /**
@@ -273,7 +317,9 @@ export function createServer(ctx: ServerContext): McpServer {
       title: "List schemas",
       description:
         "Lists schemas, optionally filtered to one catalog. System schemas (information_schema, " +
-        "pg_catalog, pg_toast, pg_temp_*, pg_toast_temp_*) are hidden unless include_system is true.",
+        "pg_catalog, pg_toast, pg_temp_*, pg_toast_temp_*) are hidden unless include_system is true. " +
+        "DuckDB keeps information_schema and pg_catalog in the `system` catalog only, so a user catalog " +
+        "normally lists just its own schemas even with include_system.",
       inputSchema: jsonSchema2020({
         catalog: z.string().optional().describe("Catalog name to filter by (exact match)."),
         include_system: z
@@ -523,6 +569,7 @@ export function createServer(ctx: ServerContext): McpServer {
       const guarded = guardStatement(sql, config.allowWrites);
       const maxRows = Math.min(max_rows ?? config.maxRows, config.maxRows);
       const bound = convertParams(params);
+      assertParameterCount(guarded.sql, bound);
       const effectiveSql = guarded.classification.wrappable
         ? wrapWithLimit(guarded.sql, maxRows + 1)
         : guarded.sql;
@@ -531,9 +578,11 @@ export function createServer(ctx: ServerContext): McpServer {
       try {
         capped = await connection.queryCapped(effectiveSql, bound, maxRows);
       } catch (err) {
-        if (guarded.classification.wrappable && !(err instanceof QueryTimeoutError)) {
+        // Only errors that cite a position need the wrapper explained.
+        const described = describeError(err, redact);
+        if (guarded.classification.wrappable && !(err instanceof QueryTimeoutError) && /\bLINE \d+\b/u.test(described)) {
           throw new Error(
-            `${describeError(err, redact)}\n(Note: to enforce max_rows the query was executed as ` +
+            `${described}\n(Note: to enforce max_rows the query was executed as ` +
               `SELECT * FROM (<your query>) AS ${WRAPPER_ALIAS} LIMIT ${maxRows + 1}, so line numbers in the ` +
               "server's message are offset by one.)",
           );
@@ -617,6 +666,7 @@ export function createServer(ctx: ServerContext): McpServer {
         const connection = conn(connectionName);
         const guarded = guardStatement(sql, true);
         const bound = convertParams(params);
+        assertParameterCount(guarded.sql, bound);
         const started = Date.now();
         const affected = await connection.update(guarded.sql, bound);
         const elapsedMs = Date.now() - started;
