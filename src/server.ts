@@ -155,6 +155,17 @@ function jsonSchema2020<T extends z.ZodRawShape>(shape: T) {
 }
 
 /**
+ * Per-backend temporary schemas of an attached Postgres database
+ * (`pg_temp_N` / `pg_toast_temp_N`). They hold nothing a client can use,
+ * one pair exists per Postgres backend, and there can be hundreds, so
+ * list_schemas never enumerates them.
+ */
+export function isTransientSchema(name: string): boolean {
+  const lower = name.toLowerCase();
+  return lower.startsWith("pg_temp_") || lower.startsWith("pg_toast_temp_");
+}
+
+/**
  * Schemas DuckDB and the Postgres-compatibility layer create in every
  * catalog. Attached Postgres databases also expose one `pg_temp_N` /
  * `pg_toast_temp_N` pair per backend, which can run into the hundreds.
@@ -162,11 +173,10 @@ function jsonSchema2020<T extends z.ZodRawShape>(shape: T) {
 export function isSystemSchema(name: string): boolean {
   const lower = name.toLowerCase();
   return (
+    isTransientSchema(name) ||
     lower === "information_schema" ||
     lower === "pg_catalog" ||
-    lower === "pg_toast" ||
-    lower.startsWith("pg_temp_") ||
-    lower.startsWith("pg_toast_temp_")
+    lower === "pg_toast"
   );
 }
 
@@ -317,27 +327,30 @@ export function createServer(ctx: ServerContext): McpServer {
       title: "List schemas",
       description:
         "Lists schemas, optionally filtered to one catalog. System schemas (information_schema, " +
-        "pg_catalog, pg_toast, pg_temp_*, pg_toast_temp_*) are hidden unless include_system is true. " +
-        "DuckDB keeps information_schema and pg_catalog in the `system` catalog only, so a user catalog " +
-        "normally lists just its own schemas even with include_system.",
+        "pg_catalog, pg_toast) are hidden unless include_system is true; the per-backend temp schemas " +
+        "of attached Postgres databases (pg_temp_N, pg_toast_temp_N) are never listed. DuckDB keeps " +
+        "information_schema and pg_catalog in the `system` catalog only, so a user catalog normally " +
+        "lists just its own schemas even with include_system.",
       inputSchema: jsonSchema2020({
         catalog: z.string().optional().describe("Catalog name to filter by (exact match)."),
         include_system: z
           .boolean()
           .optional()
-          .describe("Also list system schemas (information_schema, pg_catalog, pg_toast, pg_temp_*). Default false."),
+          .describe("Also list system schemas (information_schema, pg_catalog, pg_toast). Default false."),
         connection: connectionArg,
       }),
       annotations: { readOnlyHint: true, idempotentHint: true },
     },
     tool(async ({ catalog, include_system, connection }) => {
-      const all = await conn(connection).run((c) => c.getSchemas(catalog));
+      const found = await conn(connection).run((c) => c.getSchemas(catalog));
+      const all = found.filter((s) => !isTransientSchema(s.schema));
+      const hiddenTemp = found.length - all.length;
       const schemas = include_system ? all : all.filter((s) => !isSystemSchema(s.schema));
       const hidden = all.length - schemas.length;
       const rows = schemas.map((s) => [escapeMarkdownCell(s.catalog), escapeMarkdownCell(s.schema)]);
       let body = rows.length ? toMarkdownTable(["catalog", "schema"], rows) : "(no schemas found)";
       if (hidden > 0) body += `\n\n(${hidden} system schema${hidden === 1 ? "" : "s"} hidden; pass include_system: true to list them.)`;
-      return text(body, { schemas, hidden_system_schemas: hidden });
+      return text(body, { schemas, hidden_system_schemas: hidden, hidden_temp_schemas: hiddenTemp });
     }),
   );
 

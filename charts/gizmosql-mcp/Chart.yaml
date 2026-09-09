@@ -3,8 +3,8 @@ name: gizmosql-mcp
 description: GizmoSQL MCP server (Streamable HTTP transport) for remote MCP connectors such as Claude.ai
 type: application
 # Chart and app versions track the npm package; the release workflow asserts they match package.json.
-version: 0.4.1
-appVersion: "0.4.1"
+version: 0.4.2
+appVersion: "0.4.2"
 home: https://github.com/gizmodata/gizmosql-mcp
 sources:
   - https://github.com/gizmodata/gizmosql-mcp

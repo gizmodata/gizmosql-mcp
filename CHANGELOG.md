@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-09
+
+### Changed
+- `list_schemas` never lists the per-backend temporary schemas of an attached
+  Postgres database (`pg_temp_N`, `pg_toast_temp_N`), even with
+  `include_system: true`. They hold nothing usable, there is one pair per
+  Postgres backend, and a busy attachment exposes hundreds of them. The
+  result reports how many were skipped as `hidden_temp_schemas`.
+
 ## [0.4.1] - 2026-09-09
 
 ### Fixed
