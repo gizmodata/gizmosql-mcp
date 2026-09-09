@@ -74,6 +74,20 @@ describe("SessionStore", () => {
     assert.match(lines.find((l) => /session closed for b/.test(l)) ?? "", /pool full/);
   });
 
+  it("tells the next request once that a closed session was replaced", async () => {
+    const { s, tick } = store({ idleSeconds: 60 });
+    s.acquire("k", "alice");
+    tick(61_000);
+    await s.sweep();
+    const reopened = s.acquire("k", "alice");
+    assert.ok(reopened.info.resetAt instanceof Date, "resetAt set on the replacement session");
+    assert.equal(reopened.info.resetAt.getTime(), 1_000_000 + 61_000, "resetAt is when the old session was closed");
+    assert.ok(s.acquire("k", "alice").info.resetAt, "still pending until acknowledged");
+    s.acknowledgeReset("k");
+    assert.equal(s.acquire("k", "alice").info.resetAt, undefined);
+    assert.equal(s.acquire("new", "bob").info.resetAt, undefined, "a first-ever session has nothing to report");
+  });
+
   it("refuses new sessions after close", async () => {
     const { s } = store();
     s.acquire("a", "a");

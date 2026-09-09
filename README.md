@@ -159,8 +159,10 @@ opened with the configured service credentials), current connection and search p
 `use_schema`, `USE` and `use_connection` never affect anyone else. Sessions are created
 on first use and closed after `GIZMOSQL_MCP_SESSION_IDLE_SECONDS` without a request
 (default 30 minutes) or when `GIZMOSQL_MCP_MAX_SESSIONS` is reached (least recently used
-first); an evicted session simply starts again from the configured defaults. Session
-state lives in the pod's memory, so with several replicas either pin each user to one pod
+first). An evicted session starts again from the configured defaults, and the first tool
+result on the new session says so (a note in the text and a `session_reset` field in the
+structured content) so earlier `use_schema` / `use_connection` choices are not silently
+forgotten. Session state lives in the pod's memory, so with several replicas either pin each user to one pod
 (the ingress can hash on the `Authorization` header) or accept that a switch of pod resets
 the search path to the defaults. `login_sso` is not offered over HTTP: it opens a browser
 on the machine running the server.
@@ -365,6 +367,9 @@ npm install
 npm run build          # compile to dist/
 npm test               # unit tests (node:test)
 npm run test:integration   # starts gizmodata/gizmosql:v1.38.1 in Docker (skips without Docker)
+                           #   tools.test.ts: every tool over stdio + HTTP with a static token
+                           #   sessions.test.ts: hosted HTTP with OAuth (throwaway issuer): per-user
+                           #   isolation under concurrency, idle expiry, tool-wide result invariants
 npm run lint           # eslint --fix
 npm run typecheck
 npm run build:mcpb     # build/gizmosql-mcp-<version>.mcpb + .sha256

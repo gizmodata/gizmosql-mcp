@@ -16,11 +16,21 @@ export interface SessionInfo {
   label: string;
   createdAt: Date;
   lastUsedAt: Date;
+  /**
+   * Set when this session replaced one that was closed (idle or evicted) and
+   * the caller has not yet been told: the state they set earlier is gone.
+   * Cleared with SessionStore.acknowledgeReset once a tool result carried the note.
+   */
+  resetAt?: Date;
 }
 
 interface Entry extends SessionInfo {
   registry: ConnectionRegistry;
 }
+
+/** How long a closed session's key is remembered so the next request can be told about the reset. */
+const RESET_MEMORY_MS = 24 * 60 * 60 * 1000;
+const RESET_MEMORY_MAX = 10_000;
 
 export interface SessionStoreOptions {
   /** Seconds without a request after which a session is closed. */
@@ -36,6 +46,8 @@ export interface SessionStoreOptions {
 
 export class SessionStore {
   private readonly entries = new Map<string, Entry>();
+  /** Keys of recently closed sessions and when they were closed. */
+  private readonly closedAt = new Map<string, number>();
   private readonly log: (message: string) => void;
   private readonly now: () => number;
   private timer: NodeJS.Timeout | undefined;
@@ -63,15 +75,29 @@ export class SessionStore {
       this.evictToFit();
       const registry = new ConnectionRegistry(this.config, (m) => this.log(`${m} [${label}]`));
       entry = { key, label, createdAt: new Date(t), lastUsedAt: new Date(t), registry };
+      const closed = this.closedAt.get(key);
+      if (closed !== undefined) {
+        this.closedAt.delete(key);
+        if (t - closed <= RESET_MEMORY_MS) entry.resetAt = new Date(closed);
+      }
       this.entries.set(key, entry);
-      this.log(`[gizmosql-mcp] session opened for ${label} (${this.entries.size} active)`);
+      this.log(`[gizmosql-mcp] session ${entry.resetAt ? "re-opened" : "opened"} for ${label} (${this.entries.size} active)`);
     } else {
       entry.lastUsedAt = new Date(t);
       // Refresh insertion order so Map iteration stays least-recently-used first.
       this.entries.delete(key);
       this.entries.set(key, entry);
     }
-    return { registry: entry.registry, info: { key, label, createdAt: entry.createdAt, lastUsedAt: entry.lastUsedAt } };
+    return {
+      registry: entry.registry,
+      info: { key, label, createdAt: entry.createdAt, lastUsedAt: entry.lastUsedAt, resetAt: entry.resetAt },
+    };
+  }
+
+  /** The caller has been told about the reset; stop reporting it. */
+  acknowledgeReset(key: string): void {
+    const entry = this.entries.get(key);
+    if (entry) entry.resetAt = undefined;
   }
 
   size(): number {
@@ -106,6 +132,13 @@ export class SessionStore {
 
   private async evict(entry: Entry, reason: string): Promise<void> {
     if (!this.entries.delete(entry.key)) return;
+    if (reason !== "shutdown") {
+      if (this.closedAt.size >= RESET_MEMORY_MAX) {
+        const oldest = this.closedAt.keys().next().value;
+        if (oldest !== undefined) this.closedAt.delete(oldest);
+      }
+      this.closedAt.set(entry.key, this.now());
+    }
     this.log(`[gizmosql-mcp] session closed for ${entry.label} (${reason}; ${this.entries.size} active)`);
     await entry.registry.close().catch(() => undefined);
   }

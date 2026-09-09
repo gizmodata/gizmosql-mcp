@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Integration coverage for the hosted HTTP transport (`test/integration/sessions.test.ts`,
+  runs in the existing CI job against the GizmoSQL service container and a
+  throwaway OpenID Connect issuer): per-user isolation of `use_schema`,
+  `use_connection` and unqualified name resolution under concurrent bursts,
+  idle-session expiry end to end, and a sweep over every registered tool that
+  checks for structured content, the version stamp, and conformance to the
+  declared output schema.
+- Unit tests for `login_sso` (`test/unit/sso.test.ts`) and for the session
+  reset notice.
+
+### Changed
+- When a user's HTTP session has expired and a new one starts, the first tool
+  result says so (a note in the text and a `session_reset` field in the
+  structured content) instead of silently applying the defaults.
+- `GIZMOSQL_MCP_SESSION_IDLE_SECONDS` accepts values down to 1 second (was 30).
+
 ## [0.4.2] - 2026-09-09
 
 ### Changed

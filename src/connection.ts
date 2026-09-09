@@ -251,7 +251,7 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
       "GIZMOSQL_MCP_SESSION_IDLE_SECONDS",
       env.GIZMOSQL_MCP_SESSION_IDLE_SECONDS,
       DEFAULTS.sessionIdleSeconds,
-      { min: 30, max: 86400 },
+      { min: 1, max: 86400 },
     ),
     mcpMaxSessions: parseInteger("GIZMOSQL_MCP_MAX_SESSIONS", env.GIZMOSQL_MCP_MAX_SESSIONS, DEFAULTS.maxSessions, {
       min: 1,

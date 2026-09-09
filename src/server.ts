@@ -37,6 +37,8 @@ export interface ServerContext {
   user?: AuthenticatedUser;
   /** The caller's per-user session (HTTP transport with OAuth). */
   session?: SessionInfo;
+  /** Called once a tool result has told the caller their previous session expired. */
+  acknowledgeSessionReset?: () => void;
 }
 
 function instructions(registry: ConnectionRegistry, transport: "stdio" | "http", perUser: boolean): string {
@@ -240,14 +242,33 @@ export function createServer(ctx: ServerContext): McpServer {
     { instructions: instructions(registry, ctx.transport, ctx.session !== undefined) },
   );
 
-  /** Wraps a tool body so every failure becomes a redacted isError result. */
+  /**
+   * Wraps a tool body so every failure becomes a redacted isError result,
+   * and tells the caller once when their previous session expired (their
+   * use_schema / use_connection choices no longer apply).
+   */
   const tool = <T>(fn: (args: T) => Promise<CallToolResult>) => {
     return async (args: T): Promise<CallToolResult> => {
+      let result: CallToolResult;
       try {
-        return await fn(args);
+        result = await fn(args);
       } catch (err) {
         return errorResult(describeError(err, redact));
       }
+      const resetAt = ctx.session?.resetAt;
+      if (resetAt && !result.isError) {
+        const note =
+          `(Note: your previous session expired after ${config.mcpSessionIdleSeconds}s idle at ${resetAt.toISOString()}; ` +
+          "a new one started with the configured defaults, so earlier use_schema / use_connection choices no longer apply.)";
+        const first = result.content.find((c): c is { type: "text"; text: string } => c.type === "text");
+        if (first) first.text = `${first.text}\n\n${note}`;
+        else result.content.push({ type: "text", text: note });
+        if (result.structuredContent) {
+          result.structuredContent = { ...result.structuredContent, session_reset: { expired_at: resetAt.toISOString() } };
+        }
+        ctx.acknowledgeSessionReset?.();
+      }
+      return result;
     };
   };
 

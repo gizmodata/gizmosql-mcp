@@ -241,7 +241,14 @@ export async function startHttp(config: McpConfig, options: HttpOptions): Promis
     } else {
       registry = sharedRegistry!;
     }
-    const server = createServer({ registry, config, transport: "http", user: auth.user, session });
+    const server = createServer({
+      registry,
+      config,
+      transport: "http",
+      user: auth.user,
+      session,
+      acknowledgeSessionReset: session ? () => sessions?.acknowledgeReset(session.key) : undefined,
+    });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();
