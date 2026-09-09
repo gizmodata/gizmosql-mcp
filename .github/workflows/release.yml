@@ -6,13 +6,16 @@ on:
       - "v*"
   workflow_dispatch:
 
+env:
+  IMAGE: ghcr.io/gizmodata/gizmosql-mcp
+  CHART_OCI: oci://ghcr.io/gizmodata/charts
+
 jobs:
-  release:
-    name: Build bundle, publish release and npm package
+  test:
+    name: Test and check versions
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     services:
       gizmosql:
         image: gizmodata/gizmosql:v1.38.1
@@ -27,7 +30,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24.x
-          registry-url: "https://registry.npmjs.org"
           cache: npm
 
       - run: npm ci
@@ -41,22 +43,161 @@ jobs:
           GIZMOSQL_TEST_USERNAME: gizmosql
           GIZMOSQL_TEST_PASSWORD: gizmosql_mcp_test_password
 
-      - name: Check tag matches package.json version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Read the package version
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag, package.json and chart versions agree
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "Tag v$TAG does not match package.json version $PKG" >&2
+          PKG="${{ steps.version.outputs.version }}"
+          CHART="$(sed -n 's/^version: *//p' charts/gizmosql-mcp/Chart.yaml)"
+          APP="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' charts/gizmosql-mcp/Chart.yaml)"
+          if [ "$CHART" != "$PKG" ] || [ "$APP" != "$PKG" ]; then
+            echo "Chart version $CHART / appVersion $APP do not match package.json version $PKG" >&2
+            exit 1
+          fi
+          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ] && [ "${GITHUB_REF_NAME#v}" != "$PKG" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG" >&2
             exit 1
           fi
 
+  image:
+    name: Container image (${{ matrix.arch }})
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+      # Each architecture is built natively (the runtime stage downloads the
+      # native ADBC driver for the build host) and pushed by digest; the
+      # manifest job stitches the digests into one multi-arch tag.
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: Multi-arch image manifest
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+      - name: Create and push the manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+      - name: Inspect
+        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+
+  chart:
+    name: Helm chart
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - run: helm lint charts/gizmosql-mcp
+      - run: helm package charts/gizmosql-mcp --destination build/chart
+      - name: Push the chart to GHCR
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+          helm push build/chart/gizmosql-mcp-${{ needs.test.outputs.version }}.tgz "$CHART_OCI"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: helm-chart
+          path: build/chart/*.tgz
+          if-no-files-found: error
+
+  release:
+    name: Bundle, GitHub Release and npm package
+    needs: [test, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+
+      - run: npm ci
       - run: npm run build:mcpb
       - run: npm pack
+      - uses: actions/download-artifact@v8
+        with:
+          name: helm-chart
+          path: build/chart
 
       - name: Extract release notes from CHANGELOG
         run: |
-          VERSION="$(node -p "require('./package.json').version")"
+          VERSION="${{ needs.test.outputs.version }}"
           awk -v ver="$VERSION" '
             $0 ~ "^## \\[" ver "\\]" { found=1; next }
             found && /^## \[/ { exit }
@@ -65,6 +206,11 @@ jobs:
           if [ ! -s release_notes.md ]; then
             echo "No CHANGELOG section found for $VERSION" > release_notes.md
           fi
+          {
+            echo
+            echo "Container image: \`$IMAGE:$VERSION\` (linux/amd64, linux/arm64)"
+            echo "Helm chart: \`$CHART_OCI/gizmosql-mcp --version $VERSION\`"
+          } >> release_notes.md
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -75,6 +221,7 @@ jobs:
             build/gizmosql-mcp-*.mcpb.sha256
             build/gizmosql-mcp.mcpb
             build/gizmosql-mcp.mcpb.sha256
+            build/chart/*.tgz
             *.tgz
           body_path: release_notes.md
 

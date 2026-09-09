@@ -1,0 +1,26 @@
+{{ .Chart.Name }} {{ .Chart.AppVersion }} deployed as release {{ .Release.Name }}.
+
+{{- if .Values.ingress.enabled }}
+
+MCP endpoint:        https://{{ .Values.ingress.host }}/mcp
+Health:              https://{{ .Values.ingress.host }}/healthz
+{{- if .Values.config.GIZMOSQL_MCP_OAUTH_ISSUER }}
+OAuth metadata:      https://{{ .Values.ingress.host }}/.well-known/oauth-protected-resource/mcp
+Authorization server: {{ .Values.config.GIZMOSQL_MCP_OAUTH_ISSUER }}
+
+Add https://{{ .Values.ingress.host }}/mcp as a custom connector in Claude
+(Customize > Connectors > Add custom connector). For providers without
+dynamic client registration (Microsoft Entra ID), enter the pre-registered
+client ID and secret under Advanced settings.
+{{- else if .Values.config.GIZMOSQL_MCP_BEARER_TOKEN }}
+Authentication:      static bearer token (send `Authorization: Bearer ...`)
+{{- else }}
+Authentication:      NONE. Set config.GIZMOSQL_MCP_OAUTH_ISSUER or secret.GIZMOSQL_MCP_BEARER_TOKEN
+                     before exposing this endpoint.
+{{- end }}
+{{- else }}
+
+The Service is cluster-internal. Port-forward to try it:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "gizmosql-mcp.fullname" . }} 3000:{{ .Values.service.port }}
+  curl http://127.0.0.1:3000/healthz
+{{- end }}

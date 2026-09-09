@@ -1,0 +1,17 @@
+node_modules
+dist
+build
+drivers
+charts
+test
+scripts
+.github
+.git
+*.mcpb
+*.mcpb.sha256
+*.tgz
+.env
+.env.*
+NOTES.md
+manifest.json
+icon.png

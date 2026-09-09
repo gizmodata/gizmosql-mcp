@@ -125,21 +125,84 @@ first install.
 ### Streamable HTTP (remote connector)
 
 The same server can listen over Streamable HTTP for MCP clients that connect over the
-network, such as a Claude.ai custom connector:
+network, such as a Claude.ai custom connector. The MCP endpoint is `/mcp`; `/healthz`
+answers health checks. Put it behind TLS (an ingress or reverse proxy) before exposing
+it beyond localhost. Requests are authenticated in one of two ways.
+
+**OAuth (recommended).** Any OpenID Connect provider that issues signed JWT access
+tokens works: Microsoft Entra ID, Okta (custom authorization server), Auth0, Keycloak,
+Cognito, Clerk. The server is an OAuth 2.1 *resource server*: it verifies each bearer
+token against the provider's JWKS (issuer, audience, signature, expiry) and serves the
+RFC 9728 metadata at `/.well-known/oauth-protected-resource[/mcp]` so clients find the
+provider on their own. The token is never forwarded; the GizmoSQL connection uses the
+configured service credentials.
 
 ```bash
 GIZMOSQL_HOST=gizmosql.internal.example.com \
-GIZMOSQL_USERNAME=analyst GIZMOSQL_PASSWORD='your-password' \
-GIZMOSQL_MCP_BEARER_TOKEN='a-long-random-secret' \
+GIZMOSQL_USERNAME=mcp_service GIZMOSQL_PASSWORD='service-password' \
+GIZMOSQL_MCP_PUBLIC_URL=https://mcp.example.com/mcp \
+GIZMOSQL_MCP_OAUTH_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0 \
+GIZMOSQL_MCP_OAUTH_AUDIENCE=<application-client-id> \
+GIZMOSQL_MCP_OAUTH_SCOPES=https://mcp.example.com/mcp/access_as_user \
+GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS='*@example.com' \
 npx -y @gizmodata/gizmosql-mcp --transport http --host 0.0.0.0 --port 3000
 ```
 
-The MCP endpoint is `http://<host>:3000/mcp` (there is also `/healthz`). When
-`GIZMOSQL_MCP_BEARER_TOKEN` is set, every request must send
-`Authorization: Bearer <token>`; configure that header in the connector's request-header
-settings. Put the server behind TLS (a reverse proxy) before exposing it beyond localhost.
-OAuth for the MCP endpoint itself is not implemented yet; `transports.ts` has the single
-`authorize()` hook where it would go.
+Then add `https://mcp.example.com/mcp` as a custom connector in Claude (Customize >
+Connectors). Claude sends that URL as the OAuth `resource`, discovers the provider from
+the metadata, runs the authorization-code flow with PKCE, and retries with the token.
+Each tool call is logged with the caller's identity, and `server_info` reports it as
+`authenticated_user`.
+
+Every authenticated user gets their own session: their own GizmoSQL connections (still
+opened with the configured service credentials), current connection and search path, so
+`use_schema`, `USE` and `use_connection` never affect anyone else. Sessions are created
+on first use and closed after `GIZMOSQL_MCP_SESSION_IDLE_SECONDS` without a request
+(default 30 minutes) or when `GIZMOSQL_MCP_MAX_SESSIONS` is reached (least recently used
+first); an evicted session simply starts again from the configured defaults. Session
+state lives in the pod's memory, so with several replicas either pin each user to one pod
+(the ingress can hash on the `Authorization` header) or accept that a switch of pod resets
+the search path to the defaults. `login_sso` is not offered over HTTP: it opens a browser
+on the machine running the server.
+
+Provider notes:
+
+- **Microsoft Entra ID** does not support dynamic client registration, so the person
+  adding the connector enters the app registration's client ID and secret under
+  *Advanced settings*. On the registration: redirect URI
+  `https://claude.ai/api/mcp/auth_callback` (platform *Web*), *Expose an API* with the
+  MCP URL itself (`https://mcp.example.com/mcp`) as an Application ID URI and a scope
+  such as `access_as_user`, `requestedAccessTokenVersion` 2, and admin consent for that
+  scope. v2 access tokens carry the client ID as `aud`, hence
+  `GIZMOSQL_MCP_OAUTH_AUDIENCE=<client-id>`; set `GIZMOSQL_MCP_OAUTH_SCOPES` to
+  `<Application ID URI>/<scope>` so Claude asks for a token for this API rather than for
+  Microsoft Graph. A single-tenant registration plus `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS`
+  restricts access to one organisation.
+- **Okta** needs a custom authorization server (tokens from the org server are opaque);
+  **Auth0** needs an API with the audience; **Keycloak** works out of the box and is the
+  easiest local test target; **Clerk** issues JWT access tokens by default.
+- Providers whose access tokens are opaque (Google) are not supported in this mode.
+
+**Static bearer token.** For a quick shared secret instead of OAuth, set
+`GIZMOSQL_MCP_BEARER_TOKEN`; every request must then send `Authorization: Bearer <token>`,
+which Claude's connector settings can add as a request header. The two modes are mutually
+exclusive. With neither set the endpoint is unauthenticated, for local use only.
+
+#### Container image and Helm chart
+
+Releases publish a multi-arch image, `ghcr.io/gizmodata/gizmosql-mcp:<version>`
+(linux/amd64 and linux/arm64), whose entrypoint runs the HTTP transport on port 3000,
+and a Helm chart, `oci://ghcr.io/gizmodata/charts/gizmosql-mcp`, that deploys it with a
+ConfigMap for the `GIZMOSQL_*` settings, a Secret (or `existingSecret`) for credentials,
+and an optional Ingress:
+
+```bash
+helm upgrade --install gizmosql-mcp oci://ghcr.io/gizmodata/charts/gizmosql-mcp \
+  --version <version> --namespace gizmosql-mcp --create-namespace \
+  --values values.yaml
+```
+
+See [charts/gizmosql-mcp/values.yaml](charts/gizmosql-mcp/values.yaml) for every option.
 
 ## Configuration
 
@@ -162,7 +225,17 @@ same names.
 | `GIZMOSQL_QUERY_TIMEOUT_SECONDS` | `60` | Per-statement timeout; `0` disables it |
 | `GIZMOSQL_OAUTH_PORT` | `31339` | OAuth HTTP port used by `login_sso` |
 | `GIZMOSQL_ENABLE_SSO` | `false` | Register the `login_sso` tool (credentials may then be left empty) |
-| `GIZMOSQL_MCP_BEARER_TOKEN` | | HTTP transport only: required bearer token |
+| `GIZMOSQL_MCP_BEARER_TOKEN` | | HTTP transport: static bearer token (mutually exclusive with OAuth) |
+| `GIZMOSQL_MCP_PUBLIC_URL` | | HTTP transport with OAuth: public URL of the `/mcp` endpoint, the OAuth resource identifier |
+| `GIZMOSQL_MCP_OAUTH_ISSUER` | | HTTP transport: OpenID Connect issuer URL; setting it enables OAuth |
+| `GIZMOSQL_MCP_OAUTH_AUDIENCE` | public URL | Accepted `aud` values, comma-separated (Entra ID v2 tokens: the client ID) |
+| `GIZMOSQL_MCP_OAUTH_SCOPES` | | Scopes advertised to clients and requested on a 401 |
+| `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS` | | Glob allowlist of sign-in emails, e.g. `*@example.com` |
+| `GIZMOSQL_MCP_OAUTH_JWKS_URI` | discovered | JWKS endpoint, when discovery from the issuer is not possible |
+| `GIZMOSQL_MCP_OAUTH_USER_CLAIM` | `email,preferred_username,upn,name,sub` | Claims tried in order to name the caller |
+| `GIZMOSQL_MCP_OAUTH_ALLOW_INSECURE` | `false` | Accept `http://` issuer and public URLs (local testing only) |
+| `GIZMOSQL_MCP_SESSION_IDLE_SECONDS` | `1800` | HTTP transport with OAuth: close a user's session after this long without a request |
+| `GIZMOSQL_MCP_MAX_SESSIONS` | `200` | HTTP transport with OAuth: cap on concurrent user sessions |
 | `GIZMOSQL_2_HOST`, `GIZMOSQL_3_HOST`, … | | Additional connections, see below |
 | `GIZMOSQL_CONNECTIONS` | | Comma-separated names of further connections, see below |
 
@@ -295,6 +368,8 @@ npm run test:integration   # starts gizmodata/gizmosql:v1.38.1 in Docker (skips 
 npm run lint           # eslint --fix
 npm run typecheck
 npm run build:mcpb     # build/gizmosql-mcp-<version>.mcpb + .sha256
+docker build -t gizmosql-mcp .   # container image for the HTTP transport
+helm lint charts/gizmosql-mcp    # Helm chart
 ```
 
 Run the server locally against a container:
@@ -315,11 +390,14 @@ The integration tests can target an existing server instead of Docker with
 ### Releasing
 
 1. Move the `[Unreleased]` entries in `CHANGELOG.md` into a new `## [X.Y.Z] - YYYY-MM-DD`
-   section and set the same version in `package.json` and `manifest.json`.
+   section and set the same version in `package.json`, `manifest.json`, and
+   `charts/gizmosql-mcp/Chart.yaml` (`version` and `appVersion`).
 2. Commit, tag `vX.Y.Z`, and push: `git push origin main vX.Y.Z`.
-3. The release workflow runs the tests, builds the `.mcpb`, creates a GitHub Release with
-   the bundle, its checksum and the npm tarball (release notes come from the CHANGELOG
-   section), and publishes `@gizmodata/gizmosql-mcp` to npm.
+3. The release workflow runs the tests, builds the `.mcpb`, pushes the container image
+   (`ghcr.io/gizmodata/gizmosql-mcp`) and the Helm chart (`ghcr.io/gizmodata/charts`),
+   creates a GitHub Release with the bundle, its checksum, the chart and the npm tarball
+   (release notes come from the CHANGELOG section), and publishes
+   `@gizmodata/gizmosql-mcp` to npm.
 
 See [NOTES.md](NOTES.md) for implementation notes, known limitations and follow-ups.
 

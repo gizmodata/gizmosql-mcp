@@ -49,6 +49,8 @@ function usage(): string {
     "  --help       show this help",
     "",
     "Configuration is read from GIZMOSQL_* environment variables (see README).",
+    "HTTP transport authentication: GIZMOSQL_MCP_OAUTH_ISSUER (+ GIZMOSQL_MCP_PUBLIC_URL) for OAuth,",
+    "or GIZMOSQL_MCP_BEARER_TOKEN for a static token.",
   ].join("\n");
 }
 

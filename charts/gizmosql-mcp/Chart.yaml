@@ -1,0 +1,18 @@
+apiVersion: v2
+name: gizmosql-mcp
+description: GizmoSQL MCP server (Streamable HTTP transport) for remote MCP connectors such as Claude.ai
+type: application
+# Chart and app versions track the npm package; the release workflow asserts they match package.json.
+version: 0.4.0
+appVersion: "0.4.0"
+home: https://github.com/gizmodata/gizmosql-mcp
+sources:
+  - https://github.com/gizmodata/gizmosql-mcp
+keywords:
+  - gizmosql
+  - mcp
+  - model-context-protocol
+  - claude
+maintainers:
+  - name: GizmoData LLC
+    url: https://gizmodata.com

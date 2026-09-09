@@ -5,6 +5,8 @@ import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/s
 import { z } from "zod";
 
 import { GizmoConnection, QueryTimeoutError, redactedUri, type McpConfig } from "./connection.js";
+import type { AuthenticatedUser } from "./oauth.js";
+import type { SessionInfo } from "./sessions.js";
 import {
   cellToJson,
   cellToText,
@@ -30,10 +32,15 @@ export interface ServerContext {
   registry: ConnectionRegistry;
   config: McpConfig;
   transport: "stdio" | "http";
+  /** Caller verified by the HTTP transport's OAuth layer (absent on stdio or with a static bearer token). */
+  user?: AuthenticatedUser;
+  /** The caller's per-user session (HTTP transport with OAuth). */
+  session?: SessionInfo;
 }
 
-function instructions(registry: ConnectionRegistry): string {
+function instructions(registry: ConnectionRegistry, transport: "stdio" | "http", perUser: boolean): string {
   const multi = registry.names().length > 1;
+  const scope = transport === "http" && !perUser ? " Session state (USE, use_connection) is shared by every client of this server." : "";
   return (
     "GizmoSQL is an Arrow Flight SQL server built on DuckDB, so DuckDB SQL syntax and functions apply. " +
     "Start with list_catalogs / list_schemas / list_tables / describe_table to discover the schema, then " +
@@ -42,6 +49,7 @@ function instructions(registry: ConnectionRegistry): string {
     "and the params argument instead of interpolating them into SQL. Unless GIZMOSQL_ALLOW_WRITES is " +
     "enabled the server is read-only. Unqualified table names resolve against the session's current " +
     "catalog and schema (see server_info); use use_schema or fully qualified names to work elsewhere." +
+    scope +
     (multi
       ? ` Several GizmoSQL servers are configured (${registry.names().join(", ")}; current: ${registry.current()}). ` +
         "Every tool accepts an optional connection argument, or call use_connection to switch the default; " +
@@ -175,7 +183,7 @@ export function createServer(ctx: ServerContext): McpServer {
   const redact = (t: string) => registry.redact(t);
   const server = new McpServer(
     { name: PACKAGE_NAME, version: PACKAGE_VERSION },
-    { instructions: instructions(registry) },
+    { instructions: instructions(registry, ctx.transport, ctx.session !== undefined) },
   );
 
   /** Wraps a tool body so every failure becomes a redacted isError result. */
@@ -679,6 +687,10 @@ export function createServer(ctx: ServerContext): McpServer {
         default_catalog: connection.currentSearchPath().catalog ?? null,
         default_schema: connection.currentSearchPath().schema ?? null,
         transport: ctx.transport,
+        authenticated_user: ctx.user ? ctx.user.name : null,
+        session_scope: ctx.transport === "stdio" ? "process" : ctx.session ? "per-user" : "shared",
+        session_started: ctx.session ? ctx.session.createdAt.toISOString() : null,
+        session_idle_timeout_seconds: ctx.session ? config.mcpSessionIdleSeconds : null,
         mcp_server: `${PACKAGE_NAME} ${PACKAGE_VERSION}`,
         session_warnings: connection.sessionWarnings(),
         connections: registry.summaries(),
@@ -696,7 +708,9 @@ export function createServer(ctx: ServerContext): McpServer {
     }),
   );
 
-  if (config.enableSso) {
+  // login_sso opens a browser on the machine running the server, which only
+  // makes sense for the local stdio transport.
+  if (config.enableSso && ctx.transport === "stdio") {
     server.registerTool(
       "login_sso",
       {

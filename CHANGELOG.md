@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-09
+
+### Added
+- OAuth for the Streamable HTTP transport. With `GIZMOSQL_MCP_OAUTH_ISSUER` and
+  `GIZMOSQL_MCP_PUBLIC_URL` set, the server acts as an OAuth 2.1 resource server
+  for any OpenID Connect provider that issues JWT access tokens (Microsoft Entra
+  ID, Okta, Auth0, Keycloak, Cognito, Clerk): it discovers the provider's JWKS,
+  verifies issuer, audience, signature and expiry on every request, serves the
+  RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource`
+  (and the `/mcp`-suffixed form), and answers 401 with the `WWW-Authenticate`
+  challenge Claude.ai uses to start the sign-in flow. Optional
+  `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS` restricts callers to an email allowlist
+  (403), `GIZMOSQL_MCP_OAUTH_AUDIENCE` accepts several audiences, and
+  `GIZMOSQL_MCP_OAUTH_JWKS_URI` skips discovery. The caller's token is never
+  forwarded: GizmoSQL is reached with the configured service credentials.
+- Per-user sessions over HTTP. Each authenticated user gets their own
+  GizmoSQL connections, current connection and search path, so `use_schema`,
+  `USE` and `use_connection` no longer leak between people sharing one
+  server. Sessions close after `GIZMOSQL_MCP_SESSION_IDLE_SECONDS` (default
+  1800) without a request or when `GIZMOSQL_MCP_MAX_SESSIONS` (default 200)
+  is reached, least recently used first. `server_info` reports
+  `session_scope`, `session_started` and `session_idle_timeout_seconds`.
+- Every JSON-RPC request over HTTP is logged with the authenticated caller and
+  the tool or resource it touched, and `server_info` reports `authenticated_user`.
+- A container image for the HTTP transport (`ghcr.io/gizmodata/gizmosql-mcp`,
+  linux/amd64 and linux/arm64) and a Helm chart
+  (`oci://ghcr.io/gizmodata/charts/gizmosql-mcp`), both published by the release
+  workflow with versions locked to the npm package.
+
+### Changed
+- `GIZMOSQL_MCP_BEARER_TOKEN` and OAuth are mutually exclusive; configuring both
+  is a startup error. The 401 for a static token now carries a JSON body.
+- `login_sso` is only registered on the stdio transport; over HTTP it would
+  open a browser on the server.
+
 ## [0.3.7] - 2026-09-08
 
 ### Fixed

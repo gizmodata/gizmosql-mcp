@@ -1,0 +1,129 @@
+# Default values for gizmosql-mcp.
+#
+# The server is stateless: every HTTP request is authenticated on its own and
+# the GizmoSQL connection is shared, so it scales horizontally.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/gizmodata/gizmosql-mcp
+  pullPolicy: IfNotPresent
+  # Defaults to the chart's appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Non-secret settings, written to a ConfigMap and exposed as environment
+# variables. Any GIZMOSQL_* variable from the README works here.
+config:
+  GIZMOSQL_HOST: ""
+  GIZMOSQL_PORT: "31337"
+  # GIZMOSQL_DEFAULT_CATALOG: ""
+  # GIZMOSQL_DEFAULT_SCHEMA: ""
+  # GIZMOSQL_MAX_ROWS: "500"
+  # GIZMOSQL_QUERY_TIMEOUT_SECONDS: "60"
+
+  # Public URL of the MCP endpoint (the OAuth resource identifier). Must match
+  # ingress.host and end in /mcp.
+  GIZMOSQL_MCP_PUBLIC_URL: ""
+  # Setting the issuer turns on OAuth 2.1 resource-server mode. Leave empty to
+  # use a static bearer token (secret.GIZMOSQL_MCP_BEARER_TOKEN) instead.
+  GIZMOSQL_MCP_OAUTH_ISSUER: ""
+  # Comma-separated accepted audiences. Entra ID v2 access tokens carry the
+  # application (client) ID; spec-compliant servers use the public URL.
+  GIZMOSQL_MCP_OAUTH_AUDIENCE: ""
+  # Scopes advertised to clients (Entra: "<Application ID URI>/<scope>").
+  GIZMOSQL_MCP_OAUTH_SCOPES: ""
+  # Glob allowlist of sign-in emails, e.g. "*@example.com".
+  GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS: ""
+  # Per-user sessions (OAuth only): idle timeout and cap. Session state lives
+  # in pod memory; with replicaCount > 1 pin users to a pod at the ingress
+  # (e.g. NGINX Inc.: nginx.org/lb-method: "hash $http_authorization consistent")
+  # or accept that a pod switch resets the search path to the defaults.
+  # GIZMOSQL_MCP_SESSION_IDLE_SECONDS: "1800"
+  # GIZMOSQL_MCP_MAX_SESSIONS: "200"
+
+# Secret settings, written to a Secret. Prefer existingSecret in production and
+# keep this map empty in committed values files.
+secret:
+  GIZMOSQL_USERNAME: ""
+  GIZMOSQL_PASSWORD: ""
+  # GIZMOSQL_MCP_BEARER_TOKEN: ""
+
+# Name of a pre-created Secret whose keys are environment variables
+# (GIZMOSQL_USERNAME, GIZMOSQL_PASSWORD, ...). When set, `secret` is ignored.
+existingSecret: ""
+
+# Additional environment variables (list of EnvVar).
+extraEnv: []
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  host: ""
+  # Path prefix served by the app. /mcp, /healthz and /.well-known/* all live
+  # under /, so leave this alone unless the ingress controller needs it.
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    # Secret holding the TLS certificate. Leave empty to use the ingress
+    # controller's default/wildcard certificate.
+    secretName: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 20
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 2
+  periodSeconds: 10
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

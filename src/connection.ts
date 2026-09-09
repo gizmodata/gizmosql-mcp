@@ -4,6 +4,8 @@
 import { FlightSQLClient, QueryCancelledError, type SqlParameters } from "@gizmodata/gizmosql-client";
 import { Table, type RecordBatch } from "apache-arrow";
 
+import type { OAuthConfig } from "./oauth.js";
+
 export type AuthMethod = "password" | "none";
 
 /** Settings for one GizmoSQL server. */
@@ -39,6 +41,12 @@ export interface McpConfig {
   queryTimeoutSeconds: number;
   /** Bearer token required on every Streamable HTTP request (http transport only). */
   mcpBearerToken?: string;
+  /** OAuth resource-server settings for the HTTP transport (set when GIZMOSQL_MCP_OAUTH_ISSUER is configured). */
+  mcpOAuth?: OAuthConfig;
+  /** HTTP transport with OAuth: seconds a per-user session may sit idle before its connections are closed. */
+  mcpSessionIdleSeconds: number;
+  /** HTTP transport with OAuth: cap on concurrent per-user sessions (least recently used is closed first). */
+  mcpMaxSessions: number;
   /** Enables the optional `login_sso` tool (OAuth/SSO browser flow). */
   enableSso: boolean;
 }
@@ -50,6 +58,8 @@ export const DEFAULTS = {
   maxCellChars: 200,
   queryTimeoutSeconds: 60,
   connectionName: "default",
+  sessionIdleSeconds: 1800,
+  maxSessions: 200,
 } as const;
 
 /** Extra connection slots the Claude Desktop manifest exposes (`GIZMOSQL_2_*`, `GIZMOSQL_3_*`). */
@@ -218,6 +228,14 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
     seen.set(k, c.name);
   }
 
+  const mcpBearerToken = nonEmpty(env.GIZMOSQL_MCP_BEARER_TOKEN);
+  const mcpOAuth = parseOAuth(env);
+  if (mcpBearerToken !== undefined && mcpOAuth !== undefined) {
+    throw new ConfigError(
+      "GIZMOSQL_MCP_BEARER_TOKEN and GIZMOSQL_MCP_OAUTH_ISSUER are mutually exclusive: pick one way to authenticate HTTP clients.",
+    );
+  }
+
   return {
     connections,
     allowWrites: parseBoolean("GIZMOSQL_ALLOW_WRITES", env.GIZMOSQL_ALLOW_WRITES, false),
@@ -227,8 +245,86 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
       max: 100000,
     }),
     queryTimeoutSeconds,
-    mcpBearerToken: nonEmpty(env.GIZMOSQL_MCP_BEARER_TOKEN),
+    mcpBearerToken,
+    mcpOAuth,
+    mcpSessionIdleSeconds: parseInteger(
+      "GIZMOSQL_MCP_SESSION_IDLE_SECONDS",
+      env.GIZMOSQL_MCP_SESSION_IDLE_SECONDS,
+      DEFAULTS.sessionIdleSeconds,
+      { min: 30, max: 86400 },
+    ),
+    mcpMaxSessions: parseInteger("GIZMOSQL_MCP_MAX_SESSIONS", env.GIZMOSQL_MCP_MAX_SESSIONS, DEFAULTS.maxSessions, {
+      min: 1,
+      max: 100000,
+    }),
     enableSso,
+  };
+}
+
+/** Splits a comma- or whitespace-separated list, dropping blanks. */
+function parseList(raw: string | undefined): string[] {
+  const v = nonEmpty(raw);
+  if (v === undefined) return [];
+  return v
+    .split(/[\s,]+/u)
+    .map((s) => s.trim())
+    .filter((s) => s !== "");
+}
+
+function parseHttpsUrl(name: string, raw: string | undefined, { allowHttp }: { allowHttp: boolean }): string | undefined {
+  const v = nonEmpty(raw);
+  if (v === undefined) return undefined;
+  let url: URL;
+  try {
+    url = new URL(v);
+  } catch {
+    throw new ConfigError(`${name} must be an absolute URL (got "${v}").`);
+  }
+  if (url.protocol !== "https:" && !(allowHttp && url.protocol === "http:")) {
+    throw new ConfigError(`${name} must use https (got "${v}").`);
+  }
+  if (url.hash) throw new ConfigError(`${name} must not contain a fragment (got "${v}").`);
+  return v.replace(/\/+$/u, "");
+}
+
+/** Default claim precedence used to name an authenticated caller. */
+export const DEFAULT_USER_CLAIMS = ["email", "preferred_username", "upn", "name", "sub"] as const;
+
+/**
+ * Reads the OAuth resource-server settings for the HTTP transport. Returns
+ * undefined unless GIZMOSQL_MCP_OAUTH_ISSUER is set. Plain http URLs are
+ * accepted for the issuer and public URL only when
+ * GIZMOSQL_MCP_OAUTH_ALLOW_INSECURE=true (local testing).
+ */
+export function parseOAuth(env: NodeJS.ProcessEnv): OAuthConfig | undefined {
+  const allowHttp = parseBoolean("GIZMOSQL_MCP_OAUTH_ALLOW_INSECURE", env.GIZMOSQL_MCP_OAUTH_ALLOW_INSECURE, false);
+  const issuer = parseHttpsUrl("GIZMOSQL_MCP_OAUTH_ISSUER", env.GIZMOSQL_MCP_OAUTH_ISSUER, { allowHttp });
+  const publicUrl = parseHttpsUrl("GIZMOSQL_MCP_PUBLIC_URL", env.GIZMOSQL_MCP_PUBLIC_URL, { allowHttp });
+  if (issuer === undefined) {
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("GIZMOSQL_MCP_OAUTH_") && key !== "GIZMOSQL_MCP_OAUTH_ALLOW_INSECURE" && !isUnset(env[key])) {
+        throw new ConfigError(`${key} is set but GIZMOSQL_MCP_OAUTH_ISSUER is not; the issuer enables OAuth.`);
+      }
+    }
+    return undefined;
+  }
+  if (publicUrl === undefined) {
+    throw new ConfigError(
+      "GIZMOSQL_MCP_PUBLIC_URL is required with GIZMOSQL_MCP_OAUTH_ISSUER: the public URL of the /mcp endpoint " +
+        "(e.g. https://mcp.example.com/mcp) is the OAuth resource identifier clients request tokens for.",
+    );
+  }
+  const jwksUri = parseHttpsUrl("GIZMOSQL_MCP_OAUTH_JWKS_URI", env.GIZMOSQL_MCP_OAUTH_JWKS_URI, { allowHttp });
+  const audiences = parseList(env.GIZMOSQL_MCP_OAUTH_AUDIENCE);
+  const userClaims = parseList(env.GIZMOSQL_MCP_OAUTH_USER_CLAIM);
+  return {
+    publicUrl,
+    issuer,
+    audiences: audiences.length > 0 ? audiences : [publicUrl],
+    jwksUri,
+    scopes: parseList(env.GIZMOSQL_MCP_OAUTH_SCOPES),
+    userClaims: userClaims.length > 0 ? userClaims : [...DEFAULT_USER_CLAIMS],
+    authorizedEmails: parseList(env.GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS),
   };
 }
 
