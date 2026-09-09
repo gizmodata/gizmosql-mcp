@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-09
+
 ### Added
 - Integration coverage for the hosted HTTP transport (`test/integration/sessions.test.ts`,
   runs in the existing CI job against the GizmoSQL service container and a
