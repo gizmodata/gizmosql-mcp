@@ -180,6 +180,35 @@ describe("hosted HTTP sessions", { skip: target ? false : "Docker not available 
     return (r.structuredContent as { rows: string[][] }).rows[0][0];
   };
 
+  it("advertises offline_access, warns when it is missing, and logs every rejected token", async () => {
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+    try {
+      const withRefresh = await startServer({ GIZMOSQL_MCP_OAUTH_SCOPES: `${PUBLIC_URL}/access_as_user openid offline_access` });
+      assert.ok(!lines.some((l) => l.includes("does not include offline_access")), lines.join("\n"));
+      const withoutRefresh = await startServer({ GIZMOSQL_MCP_OAUTH_SCOPES: `${PUBLIC_URL}/access_as_user` });
+      assert.ok(lines.some((l) => l.includes("warning: GIZMOSQL_MCP_OAUTH_SCOPES does not include offline_access")), lines.join("\n"));
+
+      // A token for another audience is rejected with the challenge Claude
+      // uses to (re)authorize, and the rejection reason lands in the log.
+      const foreign = await idp.token({ sub: "eve", email: "eve@example.com" }, { audience: "api://someone-else", expiresIn: "10m" });
+      const res = await fetch(withRefresh, {
+        method: "POST",
+        headers: { authorization: `Bearer ${foreign}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      assert.equal(res.status, 401);
+      const challenge = res.headers.get("www-authenticate") ?? "";
+      assert.match(challenge, /error="invalid_token"/u);
+      assert.match(challenge, /scope="[^"]*\boffline_access\b[^"]*"/u);
+      assert.ok(lines.some((l) => /unauthorized: .*"aud" claim/u.test(l)), lines.join("\n"));
+      void withoutRefresh;
+    } finally {
+      console.error = original;
+    }
+  });
+
   it("keeps use_schema, use_connection and unqualified name resolution private to each user", async () => {
     const url = await startServer();
     const alice = await connectAs(url, "alice");

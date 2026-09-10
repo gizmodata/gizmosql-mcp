@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { redactSecrets, type McpConfig } from "./connection.js";
-import { OAuthError, OAuthVerifier, protectedResourceMetadataPaths, type AuthenticatedUser } from "./oauth.js";
+import { OAuthError, OAuthVerifier, OFFLINE_ACCESS_SCOPE, protectedResourceMetadataPaths, type AuthenticatedUser } from "./oauth.js";
 import { ConnectionRegistry } from "./registry.js";
 import { createServer } from "./server.js";
 import { SessionStore, type SessionInfo } from "./sessions.js";
@@ -214,7 +214,9 @@ export async function startHttp(config: McpConfig, options: HttpOptions): Promis
       if (auth.challenge) headers["www-authenticate"] = auth.challenge;
       res.writeHead(auth.status, headers);
       res.end(JSON.stringify({ error: auth.error, error_description: auth.description }));
-      if (auth.status === 403) log(`[gizmosql-mcp] forbidden: ${auth.description}`);
+      // 401s are logged too: an expired token with no refresh token behind it
+      // looks, from the client, like the connector silently dying.
+      log(`[gizmosql-mcp] ${auth.status === 403 ? "forbidden" : "unauthorized"}: ${auth.description}`);
       return;
     }
 
@@ -291,5 +293,12 @@ export async function startHttp(config: McpConfig, options: HttpOptions): Promis
       `(${describeTargets(config)}, writes ${config.allowWrites ? "enabled" : "disabled"}, ` +
       `auth ${authMode})`,
   );
+  if (verifier && !verifier.config.scopes.includes(OFFLINE_ACCESS_SCOPE)) {
+    log(
+      `[gizmosql-mcp] warning: GIZMOSQL_MCP_OAUTH_SCOPES does not include ${OFFLINE_ACCESS_SCOPE}; ` +
+        "providers such as Microsoft Entra ID then issue no refresh token, and clients lose access " +
+        "when the access token expires (about an hour) until the user reconnects the connector",
+    );
+  }
   return httpServer;
 }

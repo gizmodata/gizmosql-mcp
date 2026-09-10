@@ -143,7 +143,7 @@ GIZMOSQL_USERNAME=mcp_service GIZMOSQL_PASSWORD='service-password' \
 GIZMOSQL_MCP_PUBLIC_URL=https://mcp.example.com/mcp \
 GIZMOSQL_MCP_OAUTH_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0 \
 GIZMOSQL_MCP_OAUTH_AUDIENCE=<application-client-id> \
-GIZMOSQL_MCP_OAUTH_SCOPES=https://mcp.example.com/mcp/access_as_user \
+GIZMOSQL_MCP_OAUTH_SCOPES='https://mcp.example.com/mcp/access_as_user openid profile email offline_access' \
 GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS='*@example.com' \
 npx -y @gizmodata/gizmosql-mcp --transport http --host 0.0.0.0 --port 3000
 ```
@@ -153,6 +153,16 @@ Connectors). Claude sends that URL as the OAuth `resource`, discovers the provid
 the metadata, runs the authorization-code flow with PKCE, and retries with the token.
 Each tool call is logged with the caller's identity, and `server_info` reports it as
 `authenticated_user`.
+
+Claude requests exactly the scopes named in `GIZMOSQL_MCP_OAUTH_SCOPES` (they are sent in
+the `WWW-Authenticate` challenge and as `scopes_supported`), so always include
+`offline_access` alongside the API scope: it is what makes the provider issue a refresh
+token. Without it the connector works until the access token expires (about an hour with
+Entra), after which every request is a 401 that Claude cannot recover from mid-conversation
+("the token expired, I can't re-authorize from here") until the user disconnects and
+reconnects the connector. With a refresh token Claude renews the access token on its own.
+The server logs a warning at startup when the scope list lacks it, and logs every rejected
+token with the reason (`unauthorized: "exp" claim timestamp check failed`).
 
 Every authenticated user gets their own session: their own GizmoSQL connections (still
 opened with the configured service credentials), current connection and search path, so
@@ -177,9 +187,12 @@ Provider notes:
   such as `access_as_user`, `requestedAccessTokenVersion` 2, and admin consent for that
   scope. v2 access tokens carry the client ID as `aud`, hence
   `GIZMOSQL_MCP_OAUTH_AUDIENCE=<client-id>`; set `GIZMOSQL_MCP_OAUTH_SCOPES` to
-  `<Application ID URI>/<scope>` so Claude asks for a token for this API rather than for
-  Microsoft Graph. A single-tenant registration plus `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS`
-  restricts access to one organisation.
+  `<Application ID URI>/<scope> openid profile email offline_access` so Claude asks for
+  a token for this API rather than for Microsoft Graph *and* gets a refresh token (Entra
+  only issues one when `offline_access` is in the request; the Graph delegated permissions
+  `openid`, `profile`, `email` and `offline_access` must be on the registration). A
+  single-tenant registration plus `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS` restricts access
+  to one organisation.
 - **Okta** needs a custom authorization server (tokens from the org server are opaque);
   **Auth0** needs an API with the audience; **Keycloak** works out of the box and is the
   easiest local test target; **Clerk** issues JWT access tokens by default.
@@ -231,7 +244,7 @@ same names.
 | `GIZMOSQL_MCP_PUBLIC_URL` | | HTTP transport with OAuth: public URL of the `/mcp` endpoint, the OAuth resource identifier |
 | `GIZMOSQL_MCP_OAUTH_ISSUER` | | HTTP transport: OpenID Connect issuer URL; setting it enables OAuth |
 | `GIZMOSQL_MCP_OAUTH_AUDIENCE` | public URL | Accepted `aud` values, comma-separated (Entra ID v2 tokens: the client ID) |
-| `GIZMOSQL_MCP_OAUTH_SCOPES` | | Scopes advertised to clients and requested on a 401 |
+| `GIZMOSQL_MCP_OAUTH_SCOPES` | | Scopes advertised to clients and requested on a 401; include `offline_access` so a refresh token is issued |
 | `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS` | | Glob allowlist of sign-in emails, e.g. `*@example.com` |
 | `GIZMOSQL_MCP_OAUTH_JWKS_URI` | discovered | JWKS endpoint, when discovery from the issuer is not possible |
 | `GIZMOSQL_MCP_OAUTH_USER_CLAIM` | `email,preferred_username,upn,name,sub` | Claims tried in order to name the caller |

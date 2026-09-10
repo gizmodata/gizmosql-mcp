@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-10
+
+### Fixed
+- Hosted HTTP transport with OAuth: the documented scope setting requested
+  only the API scope, so Microsoft Entra ID issued no refresh token and Claude
+  lost the connector as soon as the access token expired (about an hour), with
+  no way to re-authorize mid-conversation. The README, chart and deployment
+  template now advertise `offline_access` (with `openid profile email`)
+  alongside the API scope, and the server warns at startup when
+  `GIZMOSQL_MCP_OAUTH_SCOPES` lacks it.
+- Rejected bearer tokens (401) are now logged with the reason, as 403s already
+  were, so an expired-token loop is visible in the pod logs.
+
 ## [0.4.4] - 2026-09-09
 
 ### Changed

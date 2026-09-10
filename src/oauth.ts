@@ -63,6 +63,13 @@ export class OAuthError extends Error {
 /** Asymmetric algorithms only: a symmetric alg would let the JWKS-hosted public key act as a secret. */
 export const ALLOWED_ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"];
 
+/**
+ * OpenID Connect scope that asks the provider for a refresh token. Claude
+ * requests exactly the scopes named in the WWW-Authenticate challenge, so it
+ * must be advertised here or the client cannot outlive the access token.
+ */
+export const OFFLINE_ACCESS_SCOPE = "offline_access";
+
 /** Tolerated clock skew between the provider and this host, in seconds. */
 export const CLOCK_TOLERANCE_SECONDS = 60;
 

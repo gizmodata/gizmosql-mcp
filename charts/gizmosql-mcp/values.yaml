@@ -39,7 +39,10 @@ config:
   # Comma-separated accepted audiences. Entra ID v2 access tokens carry the
   # application (client) ID; spec-compliant servers use the public URL.
   GIZMOSQL_MCP_OAUTH_AUDIENCE: ""
-  # Scopes advertised to clients (Entra: "<Application ID URI>/<scope>").
+  # Scopes advertised to clients; Claude requests exactly these. Include
+  # offline_access so the provider issues a refresh token, or the connector
+  # stops working when the access token expires (about an hour with Entra).
+  # Entra: "<Application ID URI>/<scope> openid profile email offline_access".
   GIZMOSQL_MCP_OAUTH_SCOPES: ""
   # Glob allowlist of sign-in emails, e.g. "*@example.com".
   GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS: ""
