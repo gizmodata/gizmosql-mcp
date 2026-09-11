@@ -241,7 +241,7 @@ same names.
 | `GIZMOSQL_MAX_ROWS` | `500` | Hard cap on rows returned by `run_query` |
 | `GIZMOSQL_MAX_CELL_CHARS` | `200` | Cells longer than this are truncated with `…` |
 | `GIZMOSQL_QUERY_TIMEOUT_SECONDS` | `60` | Per-statement timeout; `0` disables it |
-| `GIZMOSQL_SESSION_REFRESH_SECONDS` | `60` | Re-apply the `USE` search path and query timeout before the next statement after this long idle (GizmoSQL may have evicted the session); `0` disables it |
+| `GIZMOSQL_SESSION_REFRESH_SECONDS` | auto | Re-apply the `USE` search path and query timeout before the next statement after this long idle (GizmoSQL may have evicted the session). Unset: derived from the server's `gizmosql.session_idle_timeout` (GizmoSQL 1.38.5+), else 60; `0` disables |
 | `GIZMOSQL_OAUTH_PORT` | `31339` | OAuth HTTP port used by `login_sso` |
 | `GIZMOSQL_ENABLE_SSO` | `false` | Register the `login_sso` tool (credentials may then be left empty) |
 | `GIZMOSQL_MCP_BEARER_TOKEN` | | HTTP transport: static bearer token (mutually exclusive with OAuth) |
@@ -335,10 +335,13 @@ Other guarantees:
   failure. GizmoSQL's own idle timeout (`--session-idle-timeout`) evicts a quiet session,
   and the next request on the same bearer token silently gets a fresh session with the
   server's defaults, so the `USE` search path and query timeout would be gone without any
-  error. After `GIZMOSQL_SESSION_REFRESH_SECONDS` (default 60) without a statement, the
-  server re-applies both before the next one (two tiny statements; logged as
-  `session settings re-applied after Ns idle`); set it below the GizmoSQL idle timeout, or
-  `0` to disable. The server has no tools that touch the local filesystem or any network endpoint
+  error. So the MCP server re-applies both before the next statement after an idle gap
+  (two tiny statements; logged as `session settings re-applied after Ns idle`). The gap
+  comes from the server itself when it reports `gizmosql.session_idle_timeout` through
+  `gizmosql_settings()` (GizmoSQL 1.38.5 or newer): ten percent under the eviction point,
+  or never when eviction is off. Older servers get a 60-second default.
+  `GIZMOSQL_SESSION_REFRESH_SECONDS` overrides either (`0` disables). `server_info` shows
+  the settings the server reported and the refresh interval in effect. The server has no tools that touch the local filesystem or any network endpoint
   other than the configured GizmoSQL host (and, for `login_sso`, its OAuth endpoint).
 
 ## Troubleshooting
@@ -394,6 +397,8 @@ npm run test:integration   # starts gizmodata/gizmosql:v1.38.1 in Docker (skips 
                            #   tools.test.ts: every tool over stdio + HTTP with a static token
                            #   sessions.test.ts: hosted HTTP with OAuth (throwaway issuer): per-user
                            #   isolation under concurrency, idle expiry, tool-wide result invariants
+                           #   server-versions.test.ts: idle-session refresh against gizmosql v1.38.4
+                           #   (no startup settings) and v1.38.5 (reports session_idle_timeout)
 npm run lint           # eslint --fix
 npm run typecheck
 npm run build:mcpb     # build/gizmosql-mcp-<version>.mcpb + .sha256

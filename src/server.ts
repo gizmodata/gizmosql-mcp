@@ -775,13 +775,23 @@ export function createServer(ctx: ServerContext): McpServer {
         session_scope: ctx.transport === "stdio" ? "process" : ctx.session ? "per-user" : "shared",
         session_started: ctx.session ? ctx.session.createdAt.toISOString() : null,
         session_idle_timeout_seconds: ctx.session ? config.mcpSessionIdleSeconds : null,
+        // GizmoSQL's own idle eviction and the refresh derived from it (0 = off).
+        gizmosql_session_idle_timeout_seconds: connection.serverSettingsSnapshot()["gizmosql.session_idle_timeout"] ?? null,
+        session_refresh_seconds: connection.sessionRefreshThresholdSeconds(),
+        gizmosql_settings: connection.serverSettingsSnapshot(),
         mcp_server: `${PACKAGE_NAME} ${PACKAGE_VERSION}`,
         session_warnings: connection.sessionWarnings(),
         connections: registry.summaries(),
       };
       const lines = Object.entries(info)
-        .filter(([k]) => k !== "connections")
+        .filter(([k]) => k !== "connections" && k !== "gizmosql_settings")
         .map(([k, v]) => `- ${k}: ${Array.isArray(v) ? (v.length ? v.join("; ") : "none") : v === null ? "(not set)" : String(v)}`);
+      const settings = Object.entries(info.gizmosql_settings);
+      lines.push(
+        settings.length
+          ? `- gizmosql_settings: ${settings.map(([k, v]) => `${k.replace(/^gizmosql\./u, "")}=${v === "" ? '""' : v}`).join(", ")}`
+          : "- gizmosql_settings: (not reported by this server; GizmoSQL 1.38.5+ reports them)",
+      );
       if (info.connections.length > 1) {
         lines.push(
           "- connections: " +

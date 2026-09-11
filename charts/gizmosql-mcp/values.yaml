@@ -31,9 +31,10 @@ config:
   # GIZMOSQL_QUERY_TIMEOUT_SECONDS: "60"
   # Re-apply USE + query timeout before the next statement after this long
   # idle: GizmoSQL's idle timeout evicts quiet sessions and the replacement
-  # session silently starts with the server's defaults. Keep it below the
-  # GizmoSQL --session-idle-timeout; 0 disables.
-  # GIZMOSQL_SESSION_REFRESH_SECONDS: "60"
+  # session silently starts with the server's defaults. Unset = derived from
+  # the server's own gizmosql.session_idle_timeout (GizmoSQL 1.38.5+), else
+  # 60s. 0 disables.
+  # GIZMOSQL_SESSION_REFRESH_SECONDS: ""
 
   # Public URL of the MCP endpoint (the OAuth resource identifier). Must match
   # ingress.host and end in /mcp.

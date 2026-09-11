@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.8] - 2026-09-11
+
+### Changed
+- The idle session refresh now follows the server's own configuration. On
+  connect the server reads `gizmosql_settings()`; when GizmoSQL 1.38.5 or
+  newer reports `gizmosql.session_idle_timeout`, the refresh threshold is
+  ten percent under that eviction point, and it is off entirely when the
+  server never evicts. Servers without the new rows, or without
+  `gizmosql_settings()` at all, keep the 60-second default, so nothing
+  changes for them. `GIZMOSQL_SESSION_REFRESH_SECONDS` now defaults to
+  "auto" and still overrides when set. `server_info` reports the settings
+  the server exposed (version, edition, backend, read-only, session limits,
+  query timeout, memory limit, instance and cluster id) and the refresh
+  interval in effect; the connection log line says which policy applies.
+
+### Added
+- Integration test `test/integration/server-versions.test.ts` runs the idle
+  refresh against real `gizmodata/gizmosql:v1.38.4` and `v1.38.5`
+  containers, each with a 3-second idle timeout: the new server drives the
+  refresh from its reported timeout, the old one needs the explicit setting
+  and otherwise loses the search path after eviction.
+
 ## [0.4.7] - 2026-09-11
 
 ### Fixed

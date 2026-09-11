@@ -34,9 +34,11 @@ export interface ConnectionConfig {
    * After this many seconds without a statement, the session settings (USE
    * search path, query timeout) are re-applied before the next one, because
    * GizmoSQL may have evicted the idle session and silently started a fresh
-   * one with its own defaults (0 = never).
+   * one with its own defaults (0 = never). Unset = derive it from the
+   * server's own `gizmosql.session_idle_timeout` when it reports one
+   * (GizmoSQL 1.38.5+), else DEFAULT_SESSION_REFRESH_SECONDS.
    */
-  sessionRefreshSeconds: number;
+  sessionRefreshSeconds?: number;
 }
 
 /** Whole-server settings plus every configured connection (the first is the initial default). */
@@ -64,7 +66,6 @@ export const DEFAULTS = {
   maxRows: 500,
   maxCellChars: 200,
   queryTimeoutSeconds: 60,
-  sessionRefreshSeconds: 60,
   connectionName: "default",
   sessionIdleSeconds: 1800,
   maxSessions: 200,
@@ -138,7 +139,7 @@ function parseConnection(
   env: NodeJS.ProcessEnv,
   prefix: string,
   defaultName: string,
-  globals: { queryTimeoutSeconds: number; sessionRefreshSeconds: number; enableSso: boolean },
+  globals: { queryTimeoutSeconds: number; sessionRefreshSeconds?: number; enableSso: boolean },
 ): ConnectionConfig | null {
   const v = (suffix: string) => env[`${prefix}${suffix}`];
   const host = nonEmpty(v("HOST"));
@@ -201,12 +202,9 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
     DEFAULTS.queryTimeoutSeconds,
     { min: 0, max: 86400 },
   );
-  const sessionRefreshSeconds = parseInteger(
-    "GIZMOSQL_SESSION_REFRESH_SECONDS",
-    env.GIZMOSQL_SESSION_REFRESH_SECONDS,
-    DEFAULTS.sessionRefreshSeconds,
-    { min: 0, max: 86400 },
-  );
+  const sessionRefreshSeconds = isUnset(env.GIZMOSQL_SESSION_REFRESH_SECONDS)
+    ? undefined
+    : parseInteger("GIZMOSQL_SESSION_REFRESH_SECONDS", env.GIZMOSQL_SESSION_REFRESH_SECONDS, 0, { min: 0, max: 86400 });
   const globals = { queryTimeoutSeconds, sessionRefreshSeconds, enableSso };
 
   const connections: ConnectionConfig[] = [];
@@ -437,6 +435,24 @@ export interface RunOptions {
  * client's AbortSignal support; only if that fails to settle the call is
  * the connection dropped and reopened.
  */
+/** Session-refresh threshold when the server does not report its idle timeout. */
+export const DEFAULT_SESSION_REFRESH_SECONDS = 60;
+
+/** Setting names read from gizmosql_settings() and reported by server_info. */
+export const SERVER_SETTINGS_OF_INTEREST = [
+  "gizmosql.version",
+  "gizmosql.edition",
+  "gizmosql.backend",
+  "gizmosql.read_only",
+  "gizmosql.max_sessions",
+  "gizmosql.session_idle_timeout",
+  "gizmosql.query_timeout",
+  "gizmosql.max_metadata_size",
+  "gizmosql.memory_limit",
+  "gizmosql.instance_id",
+  "gizmosql.cluster_id",
+] as const;
+
 export interface ConnectionHooks {
   /** Test hook: builds the client (defaults to `new FlightSQLClient(config)`). */
   createClient?: (config: ConstructorParameters<typeof FlightSQLClient>[0]) => FlightSQLClient;
@@ -457,6 +473,13 @@ export class GizmoConnection {
   private lastActivityAt = 0;
   /** How many times the session settings were re-applied after an idle gap (for server_info/tests). */
   sessionRefreshes = 0;
+  /**
+   * Startup facts the server reports through gizmosql_settings() (GizmoSQL
+   * 1.38.5+): name -> value for SERVER_SETTINGS_OF_INTEREST. Empty when the
+   * server predates the rows; null until probed / when the function is missing.
+   */
+  private serverSettings: Map<string, string> | null = null;
+  private refreshPolicyLogged = false;
   private readonly createClient: NonNullable<ConnectionHooks["createClient"]>;
   private readonly now: () => number;
 
@@ -537,9 +560,77 @@ export class GizmoConnection {
     const client = this.createClient(this.clientConfig());
     await client.connect();
     await this.applySessionSettings(client);
+    await this.probeServerSettings(client);
     this.connectedAt = new Date();
     this.lastActivityAt = this.now();
     return client;
+  }
+
+  /**
+   * Reads the server's startup settings once per connection. Tolerates every
+   * older server: one without the new rows yields an empty map, one without
+   * gizmosql_settings() at all leaves it null. Never fails the connection.
+   */
+  private async probeServerSettings(client: FlightSQLClient): Promise<void> {
+    const names = SERVER_SETTINGS_OF_INTEREST.map((n) => `'${n}'`).join(", ");
+    try {
+      const table = (await client.execute(
+        `SELECT name, value FROM gizmosql_settings() WHERE name IN (${names})`,
+      )) as unknown as Table;
+      const found = new Map<string, string>();
+      const nameCol = typeof table?.getChild === "function" ? table.getChild("name") : null;
+      const valueCol = typeof table?.getChild === "function" ? table.getChild("value") : null;
+      if (nameCol && valueCol) {
+        for (let i = 0; i < table.numRows; i++) {
+          const n = nameCol.get(i);
+          const v = valueCol.get(i);
+          if (typeof n === "string" && v !== null && v !== undefined) found.set(n, String(v));
+        }
+      }
+      this.serverSettings = found;
+    } catch (err) {
+      // Pre-gizmosql_settings() server: nothing to learn, keep the defaults.
+      this.serverSettings = null;
+      this.log(`[gizmosql-mcp] server settings unavailable (older GizmoSQL?): ${this.redact(err instanceof Error ? err.message : String(err))}`);
+    }
+    if (!this.refreshPolicyLogged) {
+      this.refreshPolicyLogged = true;
+      const idle = this.serverSettings?.get("gizmosql.session_idle_timeout");
+      const threshold = this.sessionRefreshThresholdSeconds();
+      const version = this.serverSettings?.get("gizmosql.version");
+      const edition = this.serverSettings?.get("gizmosql.edition");
+      this.log(
+        `[gizmosql-mcp] session refresh ${threshold > 0 ? `after ${threshold}s idle` : "off"} ` +
+          `(server session_idle_timeout ${idle ?? "not reported"}` +
+          `${this.config.sessionRefreshSeconds !== undefined ? ", GIZMOSQL_SESSION_REFRESH_SECONDS set" : ""}` +
+          `${version ? `; GizmoSQL ${version}${edition ? ` ${edition}` : ""}` : ""})`,
+      );
+    }
+  }
+
+  /** The server's reported startup settings (name -> value); empty when unknown. */
+  serverSettingsSnapshot(): Record<string, string> {
+    return Object.fromEntries(this.serverSettings ?? []);
+  }
+
+  /**
+   * Seconds of inactivity after which the session settings are re-applied,
+   * 0 = never. Explicit configuration wins; otherwise the server's own idle
+   * timeout decides: none (0) means nothing ever evicts the session, a
+   * positive value is undercut by ten percent so a refresh always lands
+   * before eviction; a server that reports nothing gets the default.
+   */
+  sessionRefreshThresholdSeconds(): number {
+    if (this.config.sessionRefreshSeconds !== undefined) return this.config.sessionRefreshSeconds;
+    const raw = this.serverSettings?.get("gizmosql.session_idle_timeout");
+    if (raw !== undefined) {
+      const idle = Number(raw);
+      if (Number.isFinite(idle)) {
+        if (idle <= 0) return 0;
+        return Math.max(1, Math.floor(idle * 0.9));
+      }
+    }
+    return DEFAULT_SESSION_REFRESH_SECONDS;
   }
 
   /**
@@ -588,7 +679,7 @@ export class GizmoConnection {
 
   /** Re-applies the session settings when the client sat idle long enough for the server to have evicted the session. */
   private async refreshIfIdle(client: FlightSQLClient): Promise<void> {
-    const limit = this.config.sessionRefreshSeconds;
+    const limit = this.sessionRefreshThresholdSeconds();
     if (limit <= 0 || this.lastActivityAt === 0) return;
     const idleMs = this.now() - this.lastActivityAt;
     if (idleMs < limit * 1000) return;
