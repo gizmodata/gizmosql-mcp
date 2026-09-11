@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-09-11
+
+### Fixed
+- When GizmoSQL's idle timeout evicted the server's quiet session, the next
+  request on the same bearer token silently got a fresh session with the
+  server's defaults, so the configured default catalog/schema (`USE`) and
+  the server-side query timeout were gone without any error and unqualified
+  table names stopped resolving. The session settings are now re-applied
+  before the first statement after `GIZMOSQL_SESSION_REFRESH_SECONDS`
+  (default 60) of inactivity, tracking any later `use_schema`; `0`
+  disables it. Logged as `session settings re-applied after Ns idle`.
+
 ## [0.4.6] - 2026-09-11
 
 ### Fixed

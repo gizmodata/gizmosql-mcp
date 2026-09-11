@@ -30,6 +30,13 @@ export interface ConnectionConfig {
   defaultSchema?: string;
   /** Per-statement timeout applied to this connection's sessions (0 = none). */
   queryTimeoutSeconds: number;
+  /**
+   * After this many seconds without a statement, the session settings (USE
+   * search path, query timeout) are re-applied before the next one, because
+   * GizmoSQL may have evicted the idle session and silently started a fresh
+   * one with its own defaults (0 = never).
+   */
+  sessionRefreshSeconds: number;
 }
 
 /** Whole-server settings plus every configured connection (the first is the initial default). */
@@ -57,6 +64,7 @@ export const DEFAULTS = {
   maxRows: 500,
   maxCellChars: 200,
   queryTimeoutSeconds: 60,
+  sessionRefreshSeconds: 60,
   connectionName: "default",
   sessionIdleSeconds: 1800,
   maxSessions: 200,
@@ -130,7 +138,7 @@ function parseConnection(
   env: NodeJS.ProcessEnv,
   prefix: string,
   defaultName: string,
-  globals: { queryTimeoutSeconds: number; enableSso: boolean },
+  globals: { queryTimeoutSeconds: number; sessionRefreshSeconds: number; enableSso: boolean },
 ): ConnectionConfig | null {
   const v = (suffix: string) => env[`${prefix}${suffix}`];
   const host = nonEmpty(v("HOST"));
@@ -169,6 +177,7 @@ function parseConnection(
     defaultCatalog: nonEmpty(v("DEFAULT_CATALOG")),
     defaultSchema: nonEmpty(v("DEFAULT_SCHEMA")),
     queryTimeoutSeconds: globals.queryTimeoutSeconds,
+    sessionRefreshSeconds: globals.sessionRefreshSeconds,
   };
 }
 
@@ -192,7 +201,13 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): McpConfig {
     DEFAULTS.queryTimeoutSeconds,
     { min: 0, max: 86400 },
   );
-  const globals = { queryTimeoutSeconds, enableSso };
+  const sessionRefreshSeconds = parseInteger(
+    "GIZMOSQL_SESSION_REFRESH_SECONDS",
+    env.GIZMOSQL_SESSION_REFRESH_SECONDS,
+    DEFAULTS.sessionRefreshSeconds,
+    { min: 0, max: 86400 },
+  );
+  const globals = { queryTimeoutSeconds, sessionRefreshSeconds, enableSso };
 
   const connections: ConnectionConfig[] = [];
   const primary = parseConnection(
@@ -422,6 +437,13 @@ export interface RunOptions {
  * client's AbortSignal support; only if that fails to settle the call is
  * the connection dropped and reopened.
  */
+export interface ConnectionHooks {
+  /** Test hook: builds the client (defaults to `new FlightSQLClient(config)`). */
+  createClient?: (config: ConstructorParameters<typeof FlightSQLClient>[0]) => FlightSQLClient;
+  /** Test hook: clock in milliseconds (defaults to Date.now). */
+  now?: () => number;
+}
+
 export class GizmoConnection {
   private client: FlightSQLClient | null = null;
   private connecting: Promise<FlightSQLClient> | null = null;
@@ -431,12 +453,21 @@ export class GizmoConnection {
   private searchPath: SearchPath;
   /** Wall-clock at which the current client was opened (for server_info). */
   connectedAt: Date | null = null;
+  /** Clock reading when the last statement on the current client finished (0 = none yet). */
+  private lastActivityAt = 0;
+  /** How many times the session settings were re-applied after an idle gap (for server_info/tests). */
+  sessionRefreshes = 0;
+  private readonly createClient: NonNullable<ConnectionHooks["createClient"]>;
+  private readonly now: () => number;
 
   constructor(
     readonly config: ConnectionConfig,
     private readonly log: (message: string) => void = (m) => console.error(m),
+    hooks: ConnectionHooks = {},
   ) {
     this.searchPath = { catalog: config.defaultCatalog, schema: config.defaultSchema };
+    this.createClient = hooks.createClient ?? ((c) => new FlightSQLClient(c));
+    this.now = hooks.now ?? (() => Date.now());
   }
 
   /** The search path (`USE`) applied to every session. */
@@ -503,8 +534,23 @@ export class GizmoConnection {
 
   /** Opens a fresh client and applies session settings. */
   private async open(): Promise<FlightSQLClient> {
-    const client = new FlightSQLClient(this.clientConfig());
+    const client = this.createClient(this.clientConfig());
     await client.connect();
+    await this.applySessionSettings(client);
+    this.connectedAt = new Date();
+    this.lastActivityAt = this.now();
+    return client;
+  }
+
+  /**
+   * Session-scoped settings: the server-side query timeout and the `USE`
+   * search path. Applied on connect and again after an idle gap (see
+   * `sessionRefreshSeconds`): GizmoSQL's own idle timeout evicts a quiet
+   * session and the next request on the same bearer token silently gets a
+   * fresh one with the server's defaults, so nothing on the wire says the
+   * search path is gone.
+   */
+  private async applySessionSettings(client: FlightSQLClient): Promise<void> {
     this.warnings = [];
     if (this.config.queryTimeoutSeconds > 0) {
       try {
@@ -538,8 +584,17 @@ export class GizmoConnection {
         this.log(`[gizmosql-mcp] warning: ${this.warnings[this.warnings.length - 1]}`);
       }
     }
-    this.connectedAt = new Date();
-    return client;
+  }
+
+  /** Re-applies the session settings when the client sat idle long enough for the server to have evicted the session. */
+  private async refreshIfIdle(client: FlightSQLClient): Promise<void> {
+    const limit = this.config.sessionRefreshSeconds;
+    if (limit <= 0 || this.lastActivityAt === 0) return;
+    const idleMs = this.now() - this.lastActivityAt;
+    if (idleMs < limit * 1000) return;
+    await this.applySessionSettings(client);
+    this.sessionRefreshes++;
+    this.log(`[gizmosql-mcp] session settings re-applied after ${Math.round(idleMs / 1000)}s idle`);
   }
 
   /** Returns the shared client, opening it on first use. */
@@ -563,6 +618,7 @@ export class GizmoConnection {
     const client = this.client;
     this.client = null;
     this.connectedAt = null;
+    this.lastActivityAt = 0;
     if (client) {
       try {
         await client.close();
@@ -592,6 +648,7 @@ export class GizmoConnection {
         attempt++;
         const client = await this.get();
         try {
+          await this.refreshIfIdle(client);
           return await this.withDeadline((signal) => fn(client, signal), options.timeoutSeconds);
         } catch (err) {
           if (err instanceof QueryTimeoutError) {
@@ -605,6 +662,8 @@ export class GizmoConnection {
             continue;
           }
           throw err;
+        } finally {
+          if (this.client === client) this.lastActivityAt = this.now();
         }
       }
     };
