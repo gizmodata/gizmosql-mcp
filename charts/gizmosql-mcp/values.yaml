@@ -46,6 +46,11 @@ config:
   GIZMOSQL_MCP_OAUTH_SCOPES: ""
   # Glob allowlist of sign-in emails, e.g. "*@example.com".
   GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS: ""
+  # Token proxy: serve authorization-server metadata at /oauth and relay the
+  # token endpoint so refresh_token grants carry the API scope. Required with
+  # Microsoft Entra ID, which otherwise refuses Claude's refreshes (AADSTS90009)
+  # and users must reconnect every hour.
+  # GIZMOSQL_MCP_OAUTH_TOKEN_PROXY: "true"
   # Per-user sessions (OAuth only): idle timeout and cap. Session state lives
   # in pod memory; with replicaCount > 1 pin users to a pod at the ingress
   # (e.g. NGINX Inc.: nginx.org/lb-method: "hash $http_authorization consistent")

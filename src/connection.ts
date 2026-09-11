@@ -325,6 +325,7 @@ export function parseOAuth(env: NodeJS.ProcessEnv): OAuthConfig | undefined {
     scopes: parseList(env.GIZMOSQL_MCP_OAUTH_SCOPES),
     userClaims: userClaims.length > 0 ? userClaims : [...DEFAULT_USER_CLAIMS],
     authorizedEmails: parseList(env.GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS),
+    tokenProxy: parseBoolean("GIZMOSQL_MCP_OAUTH_TOKEN_PROXY", env.GIZMOSQL_MCP_OAUTH_TOKEN_PROXY, false),
   };
 }
 

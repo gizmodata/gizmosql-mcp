@@ -144,6 +144,7 @@ GIZMOSQL_MCP_PUBLIC_URL=https://mcp.example.com/mcp \
 GIZMOSQL_MCP_OAUTH_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0 \
 GIZMOSQL_MCP_OAUTH_AUDIENCE=<application-client-id> \
 GIZMOSQL_MCP_OAUTH_SCOPES='https://mcp.example.com/mcp/access_as_user openid profile email offline_access' \
+GIZMOSQL_MCP_OAUTH_TOKEN_PROXY=true \
 GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS='*@example.com' \
 npx -y @gizmodata/gizmosql-mcp --transport http --host 0.0.0.0 --port 3000
 ```
@@ -155,27 +156,28 @@ Each tool call is logged with the caller's identity, and `server_info` reports i
 `authenticated_user`.
 
 Claude requests exactly the scopes named in `GIZMOSQL_MCP_OAUTH_SCOPES` (they are sent in
-the `WWW-Authenticate` challenge and as `scopes_supported`), so always include
-`offline_access` alongside the API scope: it is what makes the provider issue a refresh
-token. Without it the connector works until the access token expires (about an hour with
-Entra), after which every request is a 401 that Claude cannot recover from mid-conversation
-("the token expired, I can't re-authorize from here") until the user disconnects and
-reconnects the connector. With a refresh token Claude renews the access token on its own.
-The server logs a warning at startup when the scope list lacks it, and logs every rejected
-token with the reason (`unauthorized: "exp" claim timestamp check failed`).
+the `WWW-Authenticate` challenge and as `scopes_supported`), so include `offline_access`
+alongside the API scope: it is what makes the provider issue a refresh token, which Claude
+uses to renew the access token on its own (reactively on a 401, and shortly before expiry).
+The server warns at startup when the scope list lacks it and logs every rejected token with
+the reason (`unauthorized: "exp" claim timestamp check failed`).
 
-Every authenticated user gets their own session: their own GizmoSQL connections (still
-opened with the configured service credentials), current connection and search path, so
-`use_schema`, `USE` and `use_connection` never affect anyone else. Sessions are created
-on first use and closed after `GIZMOSQL_MCP_SESSION_IDLE_SECONDS` without a request
-(default 30 minutes) or when `GIZMOSQL_MCP_MAX_SESSIONS` is reached (least recently used
-first). An evicted session starts again from the configured defaults, and the first tool
-result on the new session says so (a note in the text and a `session_reset` field in the
-structured content) so earlier `use_schema` / `use_connection` choices are not silently
-forgotten. Session state lives in the pod's memory, so with several replicas either pin each user to one pod
-(the ingress can hash on the `Authorization` header) or accept that a switch of pod resets
-the search path to the defaults. `login_sso` is not offered over HTTP: it opens a browser
-on the machine running the server.
+**Token proxy (required for Microsoft Entra ID).** Claude's refresh request carries only the
+OpenID Connect scopes (`openid profile offline_access`), and Entra refuses such a request
+with `AADSTS90009` because it names no resource. The connector then works until the access
+token expires (about an hour), after which every tool call fails ("the token expired, I
+can't re-authorize from here") until the user reconnects. Set
+`GIZMOSQL_MCP_OAUTH_TOKEN_PROXY=true` and the server publishes an authorization-server
+metadata document at `<public origin>/oauth` (the provider's own document with `issuer` and
+`token_endpoint` pointing at the server) and proxies the token endpoint at
+`<public origin>/oauth/token`: `refresh_token` grants get the configured API scope and
+`offline_access` added, everything else passes through byte for byte, and sign-in still
+happens at the provider. Each exchange is logged without secrets
+(`OAuth facade: refresh_token (scope added) -> HTTP 200 (refresh_token yes, expires_in 4150s)`).
+Users connected before the proxy was enabled reconnect the connector once so Claude
+discovers the new token endpoint. See
+[anthropics/claude-ai-mcp#840](https://github.com/anthropics/claude-ai-mcp/issues/840) for the
+forensic trail behind this.
 
 Provider notes:
 
@@ -190,9 +192,10 @@ Provider notes:
   `<Application ID URI>/<scope> openid profile email offline_access` so Claude asks for
   a token for this API rather than for Microsoft Graph *and* gets a refresh token (Entra
   only issues one when `offline_access` is in the request; the Graph delegated permissions
-  `openid`, `profile`, `email` and `offline_access` must be on the registration). A
-  single-tenant registration plus `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS` restricts access
-  to one organisation.
+  `openid`, `profile`, `email` and `offline_access` must be on the registration), and set
+  `GIZMOSQL_MCP_OAUTH_TOKEN_PROXY=true` so refreshes are not refused with `AADSTS90009`
+  (see *Token proxy* above). A single-tenant registration plus
+  `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS` restricts access to one organisation.
 - **Okta** needs a custom authorization server (tokens from the org server are opaque);
   **Auth0** needs an API with the audience; **Keycloak** works out of the box and is the
   easiest local test target; **Clerk** issues JWT access tokens by default.
@@ -246,6 +249,7 @@ same names.
 | `GIZMOSQL_MCP_OAUTH_AUDIENCE` | public URL | Accepted `aud` values, comma-separated (Entra ID v2 tokens: the client ID) |
 | `GIZMOSQL_MCP_OAUTH_SCOPES` | | Scopes advertised to clients and requested on a 401; include `offline_access` so a refresh token is issued |
 | `GIZMOSQL_MCP_OAUTH_AUTHORIZED_EMAILS` | | Glob allowlist of sign-in emails, e.g. `*@example.com` |
+| `GIZMOSQL_MCP_OAUTH_TOKEN_PROXY` | `false` | Publish an authorization-server facade at `/oauth` and proxy the token endpoint so `refresh_token` grants carry the API scope (required for Entra ID) |
 | `GIZMOSQL_MCP_OAUTH_JWKS_URI` | discovered | JWKS endpoint, when discovery from the issuer is not possible |
 | `GIZMOSQL_MCP_OAUTH_USER_CLAIM` | `email,preferred_username,upn,name,sub` | Claims tried in order to name the caller |
 | `GIZMOSQL_MCP_OAUTH_ALLOW_INSECURE` | `false` | Accept `http://` issuer and public URLs (local testing only) |

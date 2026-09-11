@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-11
+
+### Fixed
+- Hosted HTTP transport with Microsoft Entra ID: users were still disconnected
+  about an hour after signing in, even with `offline_access` requested and a
+  refresh token issued. Claude's `refresh_token` request carries only the
+  OpenID Connect scopes and Entra refuses it with `AADSTS90009` because it
+  names no resource (anthropics/claude-ai-mcp#840). New
+  `GIZMOSQL_MCP_OAUTH_TOKEN_PROXY=true` publishes an authorization-server
+  metadata facade at `/oauth` and proxies the token endpoint at
+  `/oauth/token`, adding the configured API scope and `offline_access` to
+  refresh grants; authorization-code exchanges pass through untouched. Every
+  exchange is logged without secrets (grant, status, whether a refresh token
+  came back, `expires_in`, the provider's error). The server warns at startup
+  when the issuer is Entra and the proxy is off. Chart and deployment
+  template enable it.
+
 ## [0.4.5] - 2026-09-10
 
 ### Fixed

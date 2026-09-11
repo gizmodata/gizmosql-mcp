@@ -31,6 +31,11 @@ export interface OAuthConfig {
   userClaims: string[];
   /** Glob patterns (`*@example.com`, `alice@example.com`); empty = everyone the provider signs in. */
   authorizedEmails: string[];
+  /**
+   * Publish an authorization-server facade and proxy the token endpoint so
+   * refresh_token grants carry the API scope (needed for Microsoft Entra ID).
+   */
+  tokenProxy?: boolean;
 }
 
 /** Identity derived from a verified access token. */
@@ -165,11 +170,11 @@ export class OAuthVerifier {
     if (options.getKey) this.keyResolver = options.getKey;
   }
 
-  /** RFC 9728 protected-resource metadata document. */
-  protectedResourceMetadata(): Record<string, unknown> {
+  /** RFC 9728 protected-resource metadata document; `authorizationServer` overrides the issuer (token-proxy facade). */
+  protectedResourceMetadata(authorizationServer: string = this.config.issuer): Record<string, unknown> {
     const doc: Record<string, unknown> = {
       resource: this.config.publicUrl,
-      authorization_servers: [this.config.issuer],
+      authorization_servers: [authorizationServer],
       bearer_methods_supported: ["header"],
     };
     if (this.config.scopes.length > 0) doc.scopes_supported = this.config.scopes;
@@ -241,31 +246,44 @@ export class OAuthVerifier {
   /** Returns the JWKS URI: configured, or read from the provider's discovery document. */
   private async discoverJwks(): Promise<string> {
     if (this.config.jwksUri) return this.config.jwksUri;
-    const errors: string[] = [];
-    for (const url of discoveryUrls(this.config.issuer)) {
-      try {
-        const res = await this.fetchImpl(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10000) });
-        if (!res.ok) {
-          errors.push(`${url}: HTTP ${res.status}`);
-          continue;
-        }
-        const doc = (await res.json()) as { jwks_uri?: unknown; issuer?: unknown };
-        if (typeof doc.jwks_uri !== "string" || doc.jwks_uri === "") {
-          errors.push(`${url}: no jwks_uri`);
-          continue;
-        }
-        if (typeof doc.issuer === "string" && doc.issuer.replace(/\/+$/u, "") !== this.config.issuer.replace(/\/+$/u, "")) {
-          errors.push(`${url}: issuer ${doc.issuer} does not match ${this.config.issuer}`);
-          continue;
-        }
-        return doc.jwks_uri;
-      } catch (err) {
-        errors.push(`${url}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    try {
+      const doc = await discoverMetadata(this.config.issuer, this.fetchImpl);
+      return doc.jwks_uri as string;
+    } catch (err) {
+      throw new OAuthError(
+        "invalid_token",
+        `${err instanceof Error ? err.message : String(err)}; set GIZMOSQL_MCP_OAUTH_JWKS_URI to skip discovery`,
+      );
     }
-    throw new OAuthError(
-      "invalid_token",
-      `OAuth discovery failed for ${this.config.issuer} (${errors.join("; ")}); set GIZMOSQL_MCP_OAUTH_JWKS_URI to skip discovery`,
-    );
   }
+}
+
+/**
+ * Fetches the provider's discovery document (OpenID Connect first, then RFC
+ * 8414). The document must name the configured issuer and a jwks_uri.
+ */
+export async function discoverMetadata(issuer: string, fetchImpl: typeof fetch = fetch): Promise<Record<string, unknown>> {
+  const errors: string[] = [];
+  for (const url of discoveryUrls(issuer)) {
+    try {
+      const res = await fetchImpl(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(10000) });
+      if (!res.ok) {
+        errors.push(`${url}: HTTP ${res.status}`);
+        continue;
+      }
+      const doc = (await res.json()) as Record<string, unknown>;
+      if (typeof doc.jwks_uri !== "string" || doc.jwks_uri === "") {
+        errors.push(`${url}: no jwks_uri`);
+        continue;
+      }
+      if (typeof doc.issuer === "string" && doc.issuer.replace(/\/+$/u, "") !== issuer.replace(/\/+$/u, "")) {
+        errors.push(`${url}: issuer ${doc.issuer} does not match ${issuer}`);
+        continue;
+      }
+      return doc;
+    } catch (err) {
+      errors.push(`${url}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  throw new Error(`OAuth discovery failed for ${issuer} (${errors.join("; ")})`);
 }

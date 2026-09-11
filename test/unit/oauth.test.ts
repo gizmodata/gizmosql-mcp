@@ -11,6 +11,7 @@ import {
   protectedResourceMetadataUrl,
   userFromClaims,
 } from "../../dist/oauth.js";
+import { facadeIssuer, facadeMetadataPaths, refreshScope } from "../../dist/oauth-facade.js";
 import { startHttp } from "../../dist/transports.js";
 import { FakeIssuer } from "../helpers/fake-issuer.ts";
 
@@ -87,6 +88,7 @@ describe("parseConfig (OAuth)", () => {
       scopes: [],
       userClaims: ["email", "preferred_username", "upn", "name", "sub"],
       authorizedEmails: [],
+      tokenProxy: false,
     });
   });
 
@@ -309,5 +311,150 @@ describe("Streamable HTTP with OAuth", () => {
     const user = await verifier.verify(`Bearer ${await idp.token({ sub: "u4", email: "d@danvaden.com" })}`);
     assert.equal(user.name, "d@danvaden.com");
     assert.equal(verifier.challenge(), `Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"`);
+  });
+});
+
+describe("oauth token-proxy facade", () => {
+  const idp = new FakeIssuer();
+  const publicUrl = "https://mcp.example.com/mcp";
+  const apiScope = "https://mcp.example.com/mcp/access_as_user";
+  let server: http.Server;
+  let origin = "";
+  const lines: string[] = [];
+  const originalError = console.error;
+
+  before(async () => {
+    await idp.start();
+    console.error = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+    const config = parseConfig({
+      ...base,
+      GIZMOSQL_MCP_OAUTH_ISSUER: idp.issuer,
+      GIZMOSQL_MCP_PUBLIC_URL: publicUrl,
+      GIZMOSQL_MCP_OAUTH_AUDIENCE: "client-id-guid",
+      GIZMOSQL_MCP_OAUTH_SCOPES: `${apiScope} openid profile email offline_access`,
+      GIZMOSQL_MCP_OAUTH_TOKEN_PROXY: "true",
+      GIZMOSQL_MCP_OAUTH_ALLOW_INSECURE: "true",
+    });
+    server = await startHttp(config, { host: "127.0.0.1", port: 0, installSignalHandlers: false });
+    const addr = server.address() as { port: number };
+    origin = `http://127.0.0.1:${addr.port}`;
+  });
+
+  after(async () => {
+    console.error = originalError;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await idp.stop();
+  });
+
+  const token = (body: Record<string, string>, headers: Record<string, string> = {}) =>
+    fetch(`${origin}/oauth/token`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", ...headers },
+      body: new URLSearchParams(body).toString(),
+    });
+
+  it("merges the API scope and offline_access into a refresh that names no resource", () => {
+    assert.deepEqual(refreshScope("openid profile offline_access", [apiScope, "openid", "offline_access"]), {
+      scope: `openid profile offline_access ${apiScope}`,
+      injected: true,
+    });
+    assert.deepEqual(refreshScope(null, [apiScope]), { scope: `${apiScope} offline_access`, injected: true });
+    assert.deepEqual(refreshScope(`${apiScope} offline_access`, [apiScope]), { scope: `${apiScope} offline_access`, injected: false });
+  });
+
+  it("points the protected-resource metadata at the facade and serves the rewritten provider document", async () => {
+    const facade = facadeIssuer(publicUrl);
+    assert.equal(facade, "https://mcp.example.com/oauth");
+    const prm = (await (await fetch(`${origin}/.well-known/oauth-protected-resource/mcp`)).json()) as { authorization_servers: string[] };
+    assert.deepEqual(prm.authorization_servers, [facade]);
+    for (const path of facadeMetadataPaths()) {
+      const res = await fetch(`${origin}${path}`);
+      assert.equal(res.status, 200, path);
+      const doc = (await res.json()) as Record<string, unknown>;
+      assert.equal(doc.issuer, facade, path);
+      assert.equal(doc.token_endpoint, `${facade}/token`, path);
+      assert.equal(doc.authorization_endpoint, `${idp.issuer}/authorize`, path);
+      assert.equal(doc.jwks_uri, idp.jwksUri, path);
+      assert.deepEqual(doc.code_challenge_methods_supported, ["S256"], path);
+    }
+    assert.ok(lines.some((l) => l.includes(`via token proxy ${facade}`)), lines.join("\n"));
+    assert.ok(!lines.some((l) => l.includes("AADSTS90009")), lines.join("\n"));
+  });
+
+  it("passes authorization_code exchanges through untouched, credentials included", async () => {
+    idp.tokenRequests.length = 0;
+    const res = await token(
+      { grant_type: "authorization_code", code: "c1", redirect_uri: "https://claude.ai/api/mcp/auth_callback", client_id: "client-id-guid", code_verifier: "v", resource: publicUrl },
+      { authorization: "Basic Y2xpZW50OnNlY3JldA==" },
+    );
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { access_token: string; refresh_token?: string };
+    assert.equal(body.refresh_token, "fake-refresh-secret");
+    assert.equal(idp.tokenRequests.length, 1);
+    const seen = idp.tokenRequests[0];
+    assert.equal(seen.params.get("scope"), null);
+    assert.equal(seen.params.get("code_verifier"), "v");
+    assert.equal(seen.params.get("resource"), publicUrl);
+    assert.equal(seen.authorization, "Basic Y2xpZW50OnNlY3JldA==");
+    assert.equal(res.headers.get("cache-control"), "no-store");
+  });
+
+  it("makes a Claude-style refresh succeed by adding the API scope, and logs no secrets", async () => {
+    idp.tokenRequests.length = 0;
+    // Entra would refuse this request as sent (no resource scope) with AADSTS90009.
+    const res = await token({
+      grant_type: "refresh_token",
+      refresh_token: "fake-refresh-secret",
+      client_id: "client-id-guid",
+      client_secret: "client-secret-value",
+      scope: "openid profile offline_access",
+      resource: publicUrl,
+    });
+    const body = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.refresh_token, "fake-refresh-secret");
+    assert.equal(body.expires_in, 3599);
+    const seen = idp.tokenRequests[0];
+    assert.equal(seen.params.get("scope"), `openid profile offline_access ${apiScope}`);
+    assert.equal(seen.params.get("refresh_token"), "fake-refresh-secret");
+    assert.equal(seen.params.get("client_secret"), "client-secret-value");
+    const line = lines.find((l) => l.includes("refresh_token (scope added)"));
+    assert.ok(line, lines.join("\n"));
+    assert.match(line, /HTTP 200 \(refresh_token yes, expires_in 3599s\)/u);
+    for (const l of lines) {
+      assert.ok(!l.includes("fake-refresh-secret") && !l.includes("client-secret-value") && !l.includes(body.access_token), l);
+    }
+  });
+
+  it("relays the provider's error, one line, when a refresh still fails", async () => {
+    // A resource scope for some other API: passed through as-is; the fake
+    // provider accepts it, so force a failure with an unsupported grant.
+    const res = await token({ grant_type: "password", username: "u", password: "p" });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { error: "unsupported_grant_type" });
+    assert.ok(lines.some((l) => /password -> HTTP 400 unsupported_grant_type$/u.test(l)), lines.join("\n"));
+    assert.equal((await fetch(`${origin}/oauth/token`)).status, 405);
+    const wrongType = await fetch(`${origin}/oauth/token`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    assert.equal(wrongType.status, 415);
+  });
+
+  it("without the proxy, warns when the issuer is Entra", async () => {
+    const before = lines.length;
+    const config = parseConfig({
+      ...base,
+      GIZMOSQL_MCP_OAUTH_ISSUER: "http://login.microsoftonline.com/tenant/v2.0",
+      GIZMOSQL_MCP_PUBLIC_URL: publicUrl,
+      GIZMOSQL_MCP_OAUTH_SCOPES: `${apiScope} offline_access`,
+      GIZMOSQL_MCP_OAUTH_JWKS_URI: idp.jwksUri,
+      GIZMOSQL_MCP_OAUTH_ALLOW_INSECURE: "true",
+    });
+    const plain = await startHttp(config, { host: "127.0.0.1", port: 0, installSignalHandlers: false });
+    try {
+      assert.ok(lines.slice(before).some((l) => l.includes("AADSTS90009") && l.includes("GIZMOSQL_MCP_OAUTH_TOKEN_PROXY=true")), lines.slice(before).join("\n"));
+      const port = (plain.address() as { port: number }).port;
+      assert.equal((await fetch(`http://127.0.0.1:${port}/oauth/token`, { method: "POST" })).status, 404);
+    } finally {
+      await new Promise<void>((resolve) => plain.close(() => resolve()));
+    }
   });
 });

@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { redactSecrets, type McpConfig } from "./connection.js";
 import { OAuthError, OAuthVerifier, OFFLINE_ACCESS_SCOPE, protectedResourceMetadataPaths, type AuthenticatedUser } from "./oauth.js";
+import { OAuthFacade, facadeMetadataPaths, facadeTokenPath } from "./oauth-facade.js";
 import { ConnectionRegistry } from "./registry.js";
 import { createServer } from "./server.js";
 import { SessionStore, type SessionInfo } from "./sessions.js";
@@ -149,6 +150,13 @@ export async function startHttp(config: McpConfig, options: HttpOptions): Promis
   // Used only for redacting log lines; secrets are the same in every registry.
   const redact = (t: string) => redactSecrets(t, sharedRegistry ? sharedRegistry.secrets() : config.connections.flatMap((c) => [c.password]));
   const metadataPaths = new Set(oauth ? protectedResourceMetadataPaths(oauth.publicUrl) : []);
+  // Token-proxy facade: Claude is pointed at this server's copy of the
+  // provider metadata so refresh_token grants pass through handleToken.
+  const facade =
+    oauth && verifier && oauth.tokenProxy
+      ? new OAuthFacade({ publicUrl: oauth.publicUrl, upstreamIssuer: oauth.issuer, scopes: oauth.scopes }, { log })
+      : undefined;
+  const facadePaths = new Set(facade ? facadeMetadataPaths() : []);
 
   const authorize = async (req: http.IncomingMessage): Promise<Authorization> => {
     if (verifier) {
@@ -187,8 +195,19 @@ export async function startHttp(config: McpConfig, options: HttpOptions): Promis
         return;
       }
       res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=300" });
-      res.end(JSON.stringify(verifier.protectedResourceMetadata()));
+      res.end(JSON.stringify(verifier.protectedResourceMetadata(facade?.issuer)));
       return;
+    }
+    if (facade) {
+      const path = url.pathname.replace(/\/+$/u, "");
+      if (facadePaths.has(path)) {
+        await facade.handleMetadata(req, res);
+        return;
+      }
+      if (path === facadeTokenPath()) {
+        await facade.handleToken(req, res);
+        return;
+      }
     }
     if (url.pathname !== "/mcp") {
       res.writeHead(404, { "content-type": "text/plain" });
@@ -284,7 +303,7 @@ export async function startHttp(config: McpConfig, options: HttpOptions): Promis
   const addr = httpServer.address();
   const shown = typeof addr === "object" && addr ? `${addr.address}:${addr.port}` : `${options.host}:${options.port}`;
   const authMode = verifier
-    ? `oauth ${verifier.config.issuer}, per-user sessions (idle ${config.mcpSessionIdleSeconds}s, max ${config.mcpMaxSessions})`
+    ? `oauth ${verifier.config.issuer}${facade ? ` via token proxy ${facade.issuer}` : ""}, per-user sessions (idle ${config.mcpSessionIdleSeconds}s, max ${config.mcpMaxSessions})`
     : bearer
       ? "bearer"
       : "none";
@@ -293,6 +312,12 @@ export async function startHttp(config: McpConfig, options: HttpOptions): Promis
       `(${describeTargets(config)}, writes ${config.allowWrites ? "enabled" : "disabled"}, ` +
       `auth ${authMode})`,
   );
+  if (verifier && !facade && /(^|\.)login\.microsoftonline\.com$/u.test(new URL(verifier.config.issuer).hostname)) {
+    log(
+      "[gizmosql-mcp] warning: Microsoft Entra ID rejects Claude's refresh_token requests unless the API scope is " +
+        "re-sent (AADSTS90009); set GIZMOSQL_MCP_OAUTH_TOKEN_PROXY=true or users must reconnect every hour",
+    );
+  }
   if (verifier && !verifier.config.scopes.includes(OFFLINE_ACCESS_SCOPE)) {
     log(
       `[gizmosql-mcp] warning: GIZMOSQL_MCP_OAUTH_SCOPES does not include ${OFFLINE_ACCESS_SCOPE}; ` +
