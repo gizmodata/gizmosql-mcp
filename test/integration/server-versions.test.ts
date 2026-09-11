@@ -8,6 +8,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import * as net from "node:net";
 import { after, before, describe, it } from "node:test";
 
 import { FlightSQLClient } from "@gizmodata/gizmosql-client";
@@ -26,6 +27,8 @@ interface Server {
   image: string;
   port: number;
   stop: () => void;
+  /** Restarts the container in place (same host port); resolves when it serves again. */
+  restart: () => Promise<void>;
 }
 
 const dockerAvailable = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
@@ -34,12 +37,25 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** A currently free localhost port. A fixed publish keeps the mapping across `docker restart`; `:0` would not. */
+function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
 async function startServer(image: string, tag: string): Promise<Server> {
   const name = `gizmosql-mcp-versions-${tag}-${process.pid}`;
+  const port = await freePort();
   execFileSync("docker", [
     "run", "--detach", "--rm", "--tty", "--init",
     "--name", name,
-    "--publish", "127.0.0.1:0:31337",
+    "--publish", `127.0.0.1:${port}:31337`,
     "--env", "TLS_ENABLED=1",
     "--env", `GIZMOSQL_USERNAME=${USERNAME}`,
     "--env", `GIZMOSQL_PASSWORD=${PASSWORD}`,
@@ -49,9 +65,8 @@ async function startServer(image: string, tag: string): Promise<Server> {
   const stop = () => {
     spawnSync("docker", ["rm", "-f", name], { stdio: "ignore" });
   };
-  try {
-    const mapping = execFileSync("docker", ["port", name, "31337/tcp"], { encoding: "utf8" });
-    const port = Number(mapping.trim().split("\n")[0].split(":").pop());
+  // The in-memory database is empty after every (re)start: recreate the fixture.
+  const ready = async () => {
     const deadline = Date.now() + 90000;
     let lastError: unknown;
     while (Date.now() < deadline) {
@@ -60,7 +75,7 @@ async function startServer(image: string, tag: string): Promise<Server> {
         await client.execute("CREATE SCHEMA IF NOT EXISTS memory.mcp_ver");
         await client.execute("CREATE OR REPLACE TABLE memory.mcp_ver.whoami AS SELECT 'mcp_ver' AS schema_name");
         await client.close();
-        return { image, port, stop };
+        return;
       } catch (err) {
         lastError = err;
         await client.close().catch(() => undefined);
@@ -68,10 +83,18 @@ async function startServer(image: string, tag: string): Promise<Server> {
       }
     }
     throw new Error(`${image} not ready: ${lastError instanceof Error ? lastError.message : lastError}`);
+  };
+  try {
+    await ready();
   } catch (err) {
     stop();
     throw err;
   }
+  const restart = async () => {
+    execFileSync("docker", ["restart", name], { stdio: ["ignore", "ignore", "inherit"] });
+    await ready();
+  };
+  return { image, port, stop, restart };
 }
 
 /** A connection whose unqualified names resolve in memory.mcp_ver only while the search path holds. */
@@ -122,6 +145,18 @@ describe("idle session refresh against real servers", { skip: dockerAvailable ? 
       await sleep(PAST_IDLE_MS); // the server evicts the session and will silently recreate it
       assert.equal(await schemaSeenBy(conn), "mcp_ver", "search path survived eviction thanks to the refresh");
       assert.equal(conn.sessionRefreshes, 1);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  it(`${NEW_IMAGE}: a server restart under a live connection is survived by a transparent reconnect`, async () => {
+    const { conn, logs } = connect(newServer);
+    try {
+      assert.equal(await schemaSeenBy(conn), "mcp_ver");
+      await newServer.restart(); // the old session token now names a dead instance
+      assert.equal(await schemaSeenBy(conn), "mcp_ver", "reconnected with a fresh handshake and search path");
+      assert.ok(logs.some((l) => /session lost \(server restarted, or session evicted\/killed\), reconnecting/u.test(l)), logs.join("\n"));
     } finally {
       await conn.close();
     }

@@ -332,7 +332,11 @@ Other guarantees:
   statement (GizmoSQL 1.38.0 or newer interrupts it server-side). DML/DDL run through
   `execute_statement` rely on the server-side timeout alone.
 - One connection per process, opened lazily and reconnected once after a connection-level
-  failure. GizmoSQL's own idle timeout (`--session-idle-timeout`) evicts a quiet session,
+  failure, and likewise when GizmoSQL reports that the session behind the bearer token is
+  gone: the server restarted ("Session not associated with this server instance", or the
+  token no longer verifies against a regenerated signing key), or the session was evicted
+  or killed. The reconnect is transparent to the caller and re-applies the search path;
+  only a rejected user credential still surfaces. GizmoSQL's own idle timeout (`--session-idle-timeout`) evicts a quiet session,
   and the next request on the same bearer token silently gets a fresh session with the
   server's defaults, so the `USE` search path and query timeout would be gone without any
   error. So the MCP server re-applies both before the next statement after an idle gap

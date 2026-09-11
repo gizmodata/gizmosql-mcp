@@ -398,6 +398,24 @@ export function isConnectionError(err: unknown): boolean {
   return CONNECTION_LOST.test(message);
 }
 
+/**
+ * GizmoSQL's ways of saying the session behind our server-issued bearer
+ * token is gone: the server restarted (the token names another instance, or
+ * no longer verifies against a regenerated signing key), the session was
+ * evicted or killed. None of these is a credentials problem: a fresh
+ * handshake with the same credentials fixes them. "Bootstrap Token
+ * verification failed" is different: that is the user's own JWT being
+ * rejected, and reconnecting cannot help, so it is deliberately excluded.
+ */
+const SESSION_LOST =
+  /session not associated with this server instance|session not found|session has been killed|may have been evicted|please re-?connect|(?<!bootstrap )token verification failed/i;
+
+/** Does this error mean the server-side session is gone and a reconnect will cure it? */
+export function isSessionLost(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return SESSION_LOST.test(message);
+}
+
 export interface SessionOverrides {
   /** Replaces the configured credentials (used by the SSO flow; kept in memory only). */
   username?: string;
@@ -745,10 +763,9 @@ export class GizmoConnection {
           if (err instanceof QueryTimeoutError) {
             throw err;
           }
-          if (attempt < 2 && isConnectionError(err)) {
-            this.log(
-              `[gizmosql-mcp] connection error, reconnecting: ${this.redact(err instanceof Error ? err.message : String(err))}`,
-            );
+          if (attempt < 2 && (isConnectionError(err) || isSessionLost(err))) {
+            const why = isSessionLost(err) ? "session lost (server restarted, or session evicted/killed)" : "connection error";
+            this.log(`[gizmosql-mcp] ${why}, reconnecting: ${this.redact(err instanceof Error ? err.message : String(err))}`);
             await this.reset();
             continue;
           }

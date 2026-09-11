@@ -26,17 +26,29 @@ const base = {
  */
 type ServerSettings = Record<string, string> | "error";
 
-/** Records every statement; behaves like a connected client. */
+/** Records every statement; behaves like a connected client. `failNext` makes the next execute() throw. */
 function fakeClient(settings: ServerSettings) {
   const statements: string[] = [];
+  let connects = 0;
   const client = {
-    async connect() {},
+    failNext: null as Error | null,
+    get connects() {
+      return connects;
+    },
+    async connect() {
+      connects++;
+    },
     async close() {},
     async executeUpdate(sql: string) {
       statements.push(sql);
       return 0;
     },
     async execute(sql: string) {
+      if (client.failNext) {
+        const err = client.failNext;
+        client.failNext = null;
+        throw err;
+      }
       statements.push(sql);
       if (/gizmosql_settings\(\)/u.test(sql)) {
         if (settings === "error") throw new Error("Catalog Error: Table Function with name gizmosql_settings does not exist!");
@@ -60,7 +72,7 @@ function connection(env: Record<string, string>, settings: ServerSettings = {}) 
     createClient: () => client as never,
     now: () => clock,
   });
-  return { conn, statements, logs, advance: (seconds: number) => (clock += seconds * 1000) };
+  return { conn, client, statements, logs, advance: (seconds: number) => (clock += seconds * 1000) };
 }
 
 const SETUP = ['SET gizmosql.query_timeout = 120', 'USE "gizmosql_poc_1"."vdp_consume"'];
@@ -139,6 +151,30 @@ describe("session refresh after idle", () => {
         assert.deepEqual(conn.serverSettingsSnapshot(), {});
       }
     }
+  });
+
+  it("reconnects transparently when the server says the session is gone (restart, eviction, kill)", async () => {
+    const { conn, client, statements, logs } = connection({}, { "gizmosql.session_idle_timeout": "0" });
+    await conn.run((c) => c.execute("SELECT 1"));
+    assert.equal(client.connects, 1);
+    // The server was restarted: the bearer token names the old instance.
+    client.failNext = Object.assign(
+      new Error("Session not associated with this server instance (158f0bd2-1111-2222-3333-444444444444). Please reconnect to establish a new session"),
+      { name: "AuthenticationError" },
+    );
+    const before = statements.length;
+    await conn.run((c) => c.execute("SELECT 2"));
+    assert.equal(client.connects, 2, "a fresh handshake");
+    // Reconnect re-applies the session settings and re-probes before retrying the statement.
+    assert.deepEqual(statements.slice(before, before + 2), SETUP);
+    assert.match(statements[before + 2], /gizmosql_settings\(\)/u);
+    assert.deepEqual(statements.slice(-1), ["SELECT 2"]);
+    assert.ok(logs.some((l) => /session lost \(server restarted, or session evicted\/killed\), reconnecting: Session not associated/u.test(l)), logs.join("\n"));
+
+    // A genuine credentials failure is not retried into a loop: it surfaces.
+    client.failNext = Object.assign(new Error("Invalid credentials"), { name: "AuthenticationError" });
+    await assert.rejects(conn.run((c) => c.execute("SELECT 3")), /Invalid credentials/u);
+    assert.equal(client.connects, 2);
   });
 
   it("lets an explicit GIZMOSQL_SESSION_REFRESH_SECONDS override what the server reports", async () => {

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-09-11
+
+### Fixed
+- A GizmoSQL restart under a live MCP connection left every later call
+  failing with "Session not associated with this server instance" (or, on a
+  server without a fixed secret key, "Token verification failed ... invalid
+  signature"), because only transport-level errors triggered a reconnect.
+  Those, together with "Session not found / evicted" and "session has been
+  killed", now count as a lost session: the connection is dropped, a fresh
+  handshake runs with the same credentials, the search path and query
+  timeout are re-applied, and the statement is retried once. A rejected
+  user credential ("Bootstrap Token verification failed") still surfaces.
+  The two-version integration test now restarts the server under a live
+  connection.
+
 ## [0.4.8] - 2026-09-11
 
 ### Changed

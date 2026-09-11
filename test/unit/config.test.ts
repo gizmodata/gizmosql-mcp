@@ -6,6 +6,7 @@ import {
   DEFAULTS,
   GizmoConnection,
   isConnectionError,
+  isSessionLost,
   parseBoolean,
   parseConfig,
   redactSecrets,
@@ -244,5 +245,22 @@ describe("isConnectionError", () => {
     assert.equal(isConnectionError(named), true);
     const auth = Object.assign(new Error("x"), { name: "AuthenticationError" });
     assert.equal(isConnectionError(auth), false);
+  });
+
+  it("recognises a lost server-side session, however it is named", () => {
+    const gone = Object.assign(
+      new Error("Session not associated with this server instance (158f0bd2-1111-2222-3333-444444444444). Please reconnect to establish a new session"),
+      { name: "AuthenticationError" },
+    );
+    assert.equal(isSessionLost(gone), true);
+    assert.equal(isConnectionError(gone), false, "not a transport failure");
+    assert.equal(isSessionLost(new Error("Session not found — it may have been evicted. Please re-connect.")), true);
+    assert.equal(isSessionLost(new Error("Your session has been killed. Please re-connect.")), true);
+    // A regenerated signing key after a restart (server without a fixed secret key).
+    assert.equal(isSessionLost(new Error("Failed to execute query: [FlightSQL] Token verification failed with error: invalid signature (InvalidArgument; ExecuteQuery)")), true);
+    // The user's own JWT being rejected is a credentials problem, not a lost session.
+    assert.equal(isSessionLost(new Error("Bootstrap Token verification failed with error: invalid signature")), false);
+    assert.equal(isSessionLost(new Error("Invalid credentials")), false);
+    assert.equal(isSessionLost(new Error("Catalog Error: Table with name x does not exist!")), false);
   });
 });
