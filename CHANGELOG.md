@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.10] - 2026-09-30
+
+### Changed
+- `@gizmodata/gizmosql-client` 2.2.1 -> 2.2.2, which bundles the
+  `gizmosql-adbc` v2.0.14 native driver (maintenance release: current Go
+  dependencies, arrow-go 18.8.0 and grpc 1.84.0, built with Go 1.26.8).
+
 ## [0.4.9] - 2026-09-11
 
 ### Fixed
