@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.11] - 2026-10-15
+
+### Changed
+- `@gizmodata/gizmosql-client` 2.2.2 -> 2.2.3, which bundles the `gizmosql-adbc` v2.0.15 native driver:
+  its Linux library is built for glibc 2.17 (was 2.34), so the server runs on older Linux hosts
+  (RHEL / Oracle Linux 7 and 8, Debian 10/11, Ubuntu 20.04). Built with Go 1.26.9.
+
 ## [0.4.10] - 2026-09-30
 
 ### Changed
